@@ -101,7 +101,7 @@ async def choose_for_me(interaction: discord.Interaction, option: str):
     options = option.split()
 
     # 2. 선택지가 1개밖에 없거나 안 적었다면 경고
-    if len(options < 2):
+    if len(options) < 2:
         await interaction.response.send_message("선택지를 2개 이상 입력해야 골라줄 수 있어! (예: '/골라 짜장면 짬뽕')")
         return
     
