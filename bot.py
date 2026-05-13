@@ -23,6 +23,7 @@ TARGET_CHANNEL_ID = 1412657432664215602
 # 한국 시간(KST) 밤 11시(23시 0분)로 알림 시간 설정
 KST = datetime.timezone(datetime.timedelta(hours=9))
 alert_time = datetime.time(hour=23, minute=00, tzinfo=KST)
+reset_time = datetime.time(hour=0, minute=0, tzinfo=KST)
 
 @bot.event
 async def on_ready():
@@ -34,7 +35,8 @@ async def on_ready():
     except Exception as e:
         print(f"명령어 동기화 실패... {e}")
 
-    check_wordle.start() # 봇이 켜지면 타이머도 시작
+    check_wordle.start() # 11시
+    reset_wordle.start()
 
 @bot.event
 async def on_message(message):
@@ -121,8 +123,31 @@ async def check_wordle_status(interaction: discord.Interaction):
     embed.add_field(name=f"🟩 완료한 사람 ({len(completed)}명)", value=completed_text, inline=False)
     embed.add_field(name=f"🟥 아직 안 한 사람 ({len(not_completed)}명)", value=not_completed_text, inline=False)
     
-    # 임베드로 보낼 때는 인자 이름을 'embed'로 지정해 줘야 해!
+    # 임베드로 보낼 때는 인자 이름을 'embed'로 지정해 줘야 함
     await interaction.response.send_message(embed=embed)
+
+# 워들 재촉 메시지 보내는 함수
+async def send_wordle_reminder(guild, channel):
+    lazy_people = []
+    # 서버 멤버들을 쭉 돌면서 안 한 사람을 찾음
+    for member in guild.members:
+        if not member.bot and member.id not in done_today:
+            lazy_people.append(member)
+    
+    # 안 한 사람이 있다면 멘션해서 재촉
+    if lazy_people:
+        mentions = ", ".join([member.mention for member in lazy_people])
+        await channel.send(f"{mentions}! You didn't play Wordle!")
+    else:
+        await channel.send("오늘은 우리 서버 모두 워들을 완료했네!")
+
+@bot.tree.command(name="워들재촉", description="아직 워들을 안 한 사람들을 멘션해서 재촉합니다.")
+async def urge_wordle(interaction: discord.Interaction):
+    # 슬래시 명령어는 무조건 interaction.response로 첫 대답을 해줘야 에러가 안 남
+    await interaction.response.send_message("🔍 워들 안 한 사람들을 색출해서 소환합니다...")
+    
+    # 재촉하는 함수 호출 (명령어를 친 서버와 채널에 알림을 보냄)
+    await send_wordle_reminder(interaction.guild, interaction.channel)
 
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
@@ -156,8 +181,10 @@ async def check_wordle():
             await channel.send(f"{mentions}! You didn't play Wordle!")
         else:
             await channel.send("오늘은 우리 서버 모두 워들을 완료했네!")
-        
-    # 알림을 보냈으면 바구니를 깨끗하게 비움
+
+@tasks.loop(time=reset_time)
+async def reset_wordle():
     done_today.clear()
+    print("자정이 되어 워들 완료 기록을 초기화했습니다!")
 
 bot.run(TOKEN)
