@@ -84,6 +84,41 @@ async def on_message_edit(before, after):
 async def check_status(interaction: discord.Interaction):
     await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
 
+@bot.tree.command(name="워들", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
+async def check_wordle_status(interaction: discord.Interaction):
+    # 완료한 사람과 안 한 사람의 이름을 담을 빈 리스트 준비
+    completed = []
+    not_completed = []
+
+    # 명령어를 친 서버(길드)의 모든 멤버를 한 명씩 확인
+    for member in interaction.guild.members:
+        if member.bot: # 나불이 같은 봇들은 검사할 필요 없으니 패스!
+            continue
+        
+        # 바구니에 아이디가 있으면 완료 리스트로, 없으면 안 한 리스트로
+        if member.id in done_today:
+            completed.append(member.display_name)
+        else:
+            not_completed.append(member.display_name)
+    
+    # 디스코드에 보낼 메시지를 꾸미기
+    msg = "📊 **오늘의 워들 현황** 📊\n\n"
+    
+    msg += f"🟩 **완료한 사람 ({len(completed)}명)**\n"
+    if completed:
+        msg += ", ".join(completed) + "\n"
+    else:
+        msg += "아직 아무도 안 했어! 다들 분발하자! 🏃‍♂️\n"
+        
+    msg += "\n🟥 **아직 안 한 사람**\n"
+    if not_completed:
+        msg += ", ".join(not_completed)
+    else:
+        msg += "전원 완료!"
+        
+    # 최종적으로 완성된 메시지를 전송
+    await interaction.response.send_message(msg)
+
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
 async def check_wordle():
