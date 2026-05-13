@@ -102,7 +102,7 @@ async def check_wordle_status(interaction: discord.Interaction):
             not_completed.append(member.display_name)
     
     # 디스코드에 보낼 메시지를 꾸미기
-    embed = discord.Embed(title="📊 **오늘의 워들 현황** 📊", color=0x4CE2EC)
+    embed = discord.Embed(title="📊 오늘의 워들 현황 📊", color=0x4CE2EC)
     
     # 🟩 완료한 사람 텍스트 정리
     if completed:
