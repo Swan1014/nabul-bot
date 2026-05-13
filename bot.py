@@ -4,7 +4,6 @@ from discord import app_commands
 import os
 from dotenv import load_dotenv
 import datetime
-from keep_alive import keep_alive
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -100,5 +99,4 @@ async def check_wordle():
     # 알림을 보냈으면 바구니를 깨끗하게 비움
     done_today.clear()
 
-keep_alive()
 bot.run(TOKEN)
