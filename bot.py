@@ -102,22 +102,29 @@ async def check_wordle_status(interaction: discord.Interaction):
             not_completed.append(member.display_name)
     
     # 디스코드에 보낼 메시지를 꾸미기
-    msg = "📊 **오늘의 워들 현황** 📊\n\n"
+    embed = discord.Embed(title="📊 **오늘의 워들 현황** 📊", color=0x4CE2EC)
     
-    msg += f"🟩 **완료한 사람 ({len(completed)}명)**\n"
+    # 🟩 완료한 사람 텍스트 정리
     if completed:
-        msg += ", ".join(completed) + "\n"
+        completed_text = ", ".join(completed)
     else:
-        msg += "아직 아무도 안 했어! 다들 분발하자! 🏃‍♂️\n"
+        completed_text = "아직 아무도 안 했어! 다들 분발하자! 🏃‍♂️"
         
-    msg += "\n🟥 **아직 안 한 사람**\n"
+    # 🟥 아직 안 한 사람 텍스트 정리
     if not_completed:
-        msg += ", ".join(not_completed)
+        not_completed_text = ", ".join(not_completed)
     else:
-        msg += "전원 완료!"
+        not_completed_text = "오늘은 모두 워들 완료!"
         
-    # 최종적으로 완성된 메시지를 전송
-    await interaction.response.send_message(msg)
+    # 상자 안에 내용(필드) 채워 넣기
+    # name: 필드 소제목 / value: 실제 내용 / inline=False: 세로로 한 줄씩 차지하게 설정
+    embed.add_field(name=f"🟩 완료한 사람 ({len(completed)}명)", value=completed_text, inline=False)
+    embed.add_field(name=f"🟥 아직 안 한 사람 ({len(not_completed)}명)", value=not_completed_text, inline=False)
+    
+    # 임베드로 보낼 때는 인자 이름을 'embed'로 지정해 줘야 해!
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="워들재촉")
 
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
