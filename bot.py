@@ -94,7 +94,7 @@ async def check_wordle_status(interaction: discord.Interaction):
 
     # 명령어를 친 서버(길드)의 모든 멤버를 한 명씩 확인
     for member in interaction.guild.members:
-        if member.bot: # 나불이 같은 봇들은 검사할 필요 없으니 패스!
+        if member.bot: # 나불이 같은 봇들은 검사할 필요 없으니 패스
             continue
         
         # 바구니에 아이디가 있으면 완료 리스트로, 없으면 안 한 리스트로
@@ -127,27 +127,27 @@ async def check_wordle_status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # 워들 재촉 메시지 보내는 함수
-async def send_wordle_reminder(guild, channel):
+def get_wordle_reminder_message(guild):
     lazy_people = []
     # 서버 멤버들을 쭉 돌면서 안 한 사람을 찾음
     for member in guild.members:
         if not member.bot and member.id not in done_today:
             lazy_people.append(member)
     
-    # 안 한 사람이 있다면 멘션해서 재촉
+    # 안 한 사람이 있다면 멘션 텍스트 생성
     if lazy_people:
         mentions = ", ".join([member.mention for member in lazy_people])
-        await channel.send(f"{mentions}! You didn't play Wordle!")
+        return f"{mentions}! You didn't play Wordle!"
     else:
-        await channel.send("오늘은 우리 서버 모두 워들을 완료했네!")
+        return "오늘은 우리 서버 모두 워들을 완료했네!"
 
 @bot.tree.command(name="워들재촉", description="아직 워들을 안 한 사람들을 멘션해서 재촉합니다.")
 async def urge_wordle(interaction: discord.Interaction):
-    # 슬래시 명령어는 무조건 interaction.response로 첫 대답을 해줘야 에러가 안 남
-    await interaction.response.send_message("🔍 워들 안 한 사람들을 색출해서 소환합니다...")
+    # 위 함수를 불러와서 보낼 메시지를 받아옴
+    msg = get_wordle_reminder_message(interaction.guild)
     
-    # 재촉하는 함수 호출 (명령어를 친 서버와 채널에 알림을 보냄)
-    await send_wordle_reminder(interaction.guild, interaction.channel)
+    # "색출 중..." 문구 없이, 바로 완성된 멘션 메시지를 한 번에 쾅! 출력
+    await interaction.response.send_message(msg)
 
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
@@ -171,16 +171,8 @@ async def check_wordle():
                 
     # 2. 결정된 알림 채널들에 각각 메시지를 보냄
     for guild, channel in notify_list:
-        lazy_people = []
-        for member in guild.members:
-            if not member.bot and member.id not in done_today:
-                lazy_people.append(member)
-        
-        if lazy_people:
-            mentions = ", ".join([member.mention for member in lazy_people])
-            await channel.send(f"{mentions}! You didn't play Wordle!")
-        else:
-            await channel.send("오늘은 우리 서버 모두 워들을 완료했네!")
+        msg = get_wordle_reminder_message(guild)
+        await channel.send(msg)
 
 @tasks.loop(time=reset_time)
 async def reset_wordle():
