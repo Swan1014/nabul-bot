@@ -62,7 +62,7 @@ async def on_message(message):
 
 @bot.tree.command(name="나불이", description="나불이가 일하고 있는지 확인합니다.")
 async def check_status(interaction: discord.Interaction):
-    await interaction.response.send_messasge("네에~ 나불이 일하고 있어요😆")
+    await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
 
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
