@@ -1,5 +1,6 @@
 import discord
 from discord.ext import tasks, commands
+from discord import app_commands
 import os
 from dotenv import load_dotenv
 import datetime
@@ -27,6 +28,13 @@ alert_time = datetime.time(hour=23, minute=00, tzinfo=KST)
 @bot.event
 async def on_ready():
     print(f'짜잔! {bot.user} 봇이 온라인 상태가 되었습니다!')
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"슬래시 명령어 {len(synced)}개 동기화 완료!")
+    except Exception as e:
+        print(f"명령어 동기화 실패... {e}")
+
     check_wordle.start() # 봇이 켜지면 타이머도 시작
 
 @bot.event
@@ -52,9 +60,9 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-@bot.command(name='나불이')
-async def check_status(ctx):
-    await ctx.send("네에~ 나불이 일하고 있어요😆")
+@bot.tree.command(name="나불이", description="나불이가 일하고 있는지 확인합니다.")
+async def check_status(interaction: discord.Interaction):
+    await interaction.response.send_messasge("네에~ 나불이 일하고 있어요😆")
 
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
