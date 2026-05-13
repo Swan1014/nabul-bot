@@ -59,6 +59,27 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+# 메시지가 수정(Edit)되었을 때 발동하는 이벤트!
+@bot.event
+async def on_message_edit(before, after):
+    # before는 수정 전 메시지, after는 수정 후 메시지
+    if after.author.bot:
+        # 워들 봇이 메시지를 수정했고, 수정된 내용에 "was playing"이 있다면
+        if after.author.name == "Wordle" and "was playing" in after.content:
+            nickname = after.content.replace(" was playing", "").strip()
+            
+            found_user = None
+            for member in after.guild.members:
+                if member.display_name == nickname or member.name == nickname:
+                    found_user = member
+                    break
+            
+            if found_user:
+                # 이미 완료 처리된 사람인지 한 번 더 확인 (중복 알림 방지)
+                if found_user.id not in done_today:
+                    done_today.add(found_user.id)
+                    await after.channel.send(f"오! {found_user.display_name}님 워들 완료! (수정된 메시지 감지, 현재 {len(done_today)}명 완료)")
+
 @bot.tree.command(name="나불이", description="나불이가 일하고 있는지 확인합니다.")
 async def check_status(interaction: discord.Interaction):
     await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
