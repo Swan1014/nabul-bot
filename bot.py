@@ -52,6 +52,10 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+@bot.command(name='나불이')
+async def check_status(ctx):
+    await ctx.send("네에~ 나불이 일하고 있어요😆")
+
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
 async def check_wordle():
