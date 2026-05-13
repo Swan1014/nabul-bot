@@ -86,6 +86,11 @@ async def on_message_edit(before, after):
 async def check_status(interaction: discord.Interaction):
     await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
 
+@bot.tree.command(name="핑", description="나불이의 현재 핑을 보여줍니다.")
+async def check_ping(interaction: discord.Interaction):
+    ping_ms = round(bot.latency * 1000) # 1000을 곱하는 이유는 초에서 밀리초 변환
+    await interaction.response.send_message(f"🏓 퐁!\n나불이 반응 속도: {ping_ms}ms")
+
 @bot.tree.command(name="워들", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
 async def check_wordle_status(interaction: discord.Interaction):
     # 완료한 사람과 안 한 사람의 이름을 담을 빈 리스트 준비
