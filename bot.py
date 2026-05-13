@@ -4,6 +4,7 @@ from discord import app_commands
 import os
 from dotenv import load_dotenv
 import datetime
+import random
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -52,16 +53,16 @@ async def on_message(message):
             
             if found_user:
                 done_today.add(found_user.id)
-                await message.channel.send(f"오! {found_user.display_name}님 워들 완료! (현재 {len(done_today)}명 완료)")
+                await message.channel.send(f"{found_user.display_name}, 워들 완료 확인! (현재 {len(done_today)}명 완료)")
         return
 
     if "Wordle" in message.content and "🟩" in message.content:
         done_today.add(message.author.id)
-        await message.channel.send(f"{message.author.display_name}님, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
+        await message.channel.send(f"{message.author.display_name}, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
 
     await bot.process_commands(message)
 
-# 메시지가 수정(Edit)되었을 때 발동하는 이벤트!
+# 메시지가 수정(Edit)되었을 때 발동하는 이벤트
 @bot.event
 async def on_message_edit(before, after):
     # before는 수정 전 메시지, after는 수정 후 메시지
@@ -82,6 +83,9 @@ async def on_message_edit(before, after):
                     done_today.add(found_user.id)
                     await after.channel.send(f"오! {found_user.display_name}님 워들 완료! (수정된 메시지 감지, 현재 {len(done_today)}명 완료)")
 
+# ==========================================
+# 편의성 명령어
+# ==========================================
 @bot.tree.command(name="나불이", description="나불이가 일하고 있는지 확인합니다.")
 async def check_status(interaction: discord.Interaction):
     await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
@@ -90,6 +94,27 @@ async def check_status(interaction: discord.Interaction):
 async def check_ping(interaction: discord.Interaction):
     ping_ms = round(bot.latency * 1000) # 1000을 곱하는 이유는 초에서 밀리초 변환
     await interaction.response.send_message(f"🏓 퐁!\n나불이 반응 속도: {ping_ms}ms")
+
+@bot.tree.command(name="골라", description="선택지를 띄어쓰기로 구분하여 입력하면 나불이가 하나를 골라줍니다.")
+async def choose_for_me(interaction: discord.Interaction, option: str):
+    # 1. 사용자가 입력한 문자열을 띄어쓰기 기준으로 잘라서 리스트로 만듦
+    options = option.split()
+
+    # 2. 선택지가 1개밖에 없거나 안 적었다면 경고
+    if len(options < 2):
+        await interaction.response.send_message("선택지를 2개 이상 입력해야 골라줄 수 있어! (예: '/골라 짜장면 짬뽕')")
+        return
+    
+    # 3. random.choice()로 리스트 안의 항목 중 하나를 무작위로 뽑음
+    picked = random.choice(options)
+
+    # 4. 결과 출력
+    msg = f"나불이의 선택은... {picked}! 🎉"
+    await interaction.response.send_message(msg)
+
+# ==========================================
+# 워들 명령어
+# ==========================================
 
 @bot.tree.command(name="워들", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
 async def check_wordle_status(interaction: discord.Interaction):
@@ -144,7 +169,7 @@ def get_wordle_reminder_message(guild):
         mentions = ", ".join([member.mention for member in lazy_people])
         return f"{mentions}! You didn't play Wordle!"
     else:
-        return "오늘은 우리 서버 모두 워들을 완료했네!"
+        return "오늘은 모두 워들을 완료했네!"
 
 @bot.tree.command(name="워들재촉", description="아직 워들을 안 한 사람들을 멘션해서 재촉합니다.")
 async def urge_wordle(interaction: discord.Interaction):
@@ -182,6 +207,6 @@ async def check_wordle():
 @tasks.loop(time=reset_time)
 async def reset_wordle():
     done_today.clear()
-    print("자정이 되어 워들 완료 기록을 초기화했습니다!")
+    print("자정이 되어서 워들 완료 기록을 초기화했어!")
 
 bot.run(TOKEN)
