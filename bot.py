@@ -124,8 +124,6 @@ async def check_wordle_status(interaction: discord.Interaction):
     # 임베드로 보낼 때는 인자 이름을 'embed'로 지정해 줘야 해!
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="워들재촉")
-
 # 지정된 시간(11시)에 실행되는 잔소리 기능
 @tasks.loop(time=alert_time)
 async def check_wordle():
