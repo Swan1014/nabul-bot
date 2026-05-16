@@ -11,6 +11,7 @@ import csv
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 KMA_API_KEY = os.getenv('KMA_API_KEY')
+AIR_API_KEY = os.getenv('AIR_API_KEY')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -36,6 +37,9 @@ async def on_ready():
     load_weather_area() # 날씨를 위한 지역 데이터 가져옴
     print(f"전국 날씨 좌표 {len(area_data)}개 로딩 완료!")
 
+    load_air_stations() # 미세먼지 측정소도 같이 외워둠
+    print(f"전국 미세먼지 측정소 {len(air_stations)}개 로딩 완료!")
+
     try:
         synced = await bot.tree.sync()
         print(f"슬래시 명령어 {len(synced)}개 동기화 완료!")
@@ -44,6 +48,8 @@ async def on_ready():
 
     check_wordle.start() # 11시
     reset_wordle.start()
+
+    print("나불이 준비 완료!")
 
 # ==========================================
 # 편의성 명령어
@@ -246,14 +252,53 @@ def load_weather_area():
             
             nx = row[5]
             ny = row[6]
+
+            try:
+                lon = float(row[13]) # 경도
+                lat = float(row[14]) # 위도
+            except:
+                lon, lat = 0.0, 0.0
             
             if full_name:
-                # 쪼개진 데이터(a1, a2, a3)와 깊이(depth)도 메모리에 같이 저장
                 area_data.append({
                     "name": full_name, 
                     "a1": area_1, "a2": area_2, "a3": area_3, 
-                    "depth": depth, "nx": nx, "ny": ny
+                    "depth": depth, "nx": nx, "ny": ny,
+                    "lon": lon, "lat": lat # ⭐️ 메모리에 위경도도 같이 저장!
                 })
+
+def load_air_stations():
+    global air_stations
+    air_stations = []
+    
+    # 17개 광역시도의 측정소 리스트를 모두 가져옴
+    sidos = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주", "세종"]
+    url = "http://apis.data.go.kr/B552584/MsrstnInfoInqireSvc/getMsrstnList"
+    
+    for sido in sidos:
+        params = {
+            'serviceKey': AIR_API_KEY,
+            'returnType': 'json',
+            'numOfRows': '300', # 경기도는 100개가 넘으므로 넉넉하게 300개
+            'pageNo': '1',
+            'addr': sido,
+            'ver': '1.1' # dmX, dmY 가져오기 위해 필수
+        }
+        try:
+            res = requests.get(url, params=params)
+            data = res.json()
+            items = data.get('response', {}).get('body', {}).get('items', [])
+            
+            for st in items:
+                try:
+                    lon = float(st['dmX'])
+                    lat = float(st['dmY'])
+                    name = st['stationName']
+                    air_stations.append({'name': name, 'sido': sido, 'lon': lon, 'lat': lat})
+                except:
+                    continue
+        except Exception as e:
+            print(f"{sido} 측정소 로딩 실패: {e}")                
 
 def search_coordinates(query):
     # 축약어를 정식 명칭으로 번역
@@ -439,8 +484,76 @@ def get_forecast(nx, ny):
     except Exception as e:
         print(f"예보 API 에러: {e}")
         return None, None, None
+
+def get_lon_lat(target_name):
+    for area in area_data:
+        if area['name'] == target_name:
+            return area['lon'], area['lat']
+    return 0.0, 0.0
+
+def get_pm_grade(value, is_pm10=True):
+    # 측정소가 점검 중이거나 값이 비어있을 때의 방어 로직
+    if value in ['-', '', None] or not str(value).isdigit():
+        return f"{value} (정보 없음 ⚪)"
+        
+    val = int(value)
     
-def create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour):
+    if is_pm10: # 미세먼지 기준
+        if val <= 30: return f"{val} (🔵좋음)"
+        elif val <= 80: return f"{val} (🟢보통)"
+        elif val <= 150: return f"{val} (🟠나쁨)"
+        else: return f"{val} (🔴매우나쁨)"
+    else: # 초미세먼지 기준
+        if val <= 15: return f"{val} (🔵좋음)"
+        elif val <= 35: return f"{val} (🟢보통)"
+        elif val <= 75: return f"{val} (🟠나쁨)"
+        else: return f"{val} (🔴매우나쁨)"
+    
+def get_air_quality(my_lon, my_lat):
+    if not air_stations: return None
+    
+    # 1. 전국 600개 측정소 중에서 피타고라스로 가장 가까운 곳 찾기
+    min_dist = float('inf')
+    best_station = None
+    
+    for st in air_stations:
+        dist = (my_lon - st['lon'])**2 + (my_lat - st['lat'])**2
+        if dist < min_dist:
+            min_dist = dist
+            best_station = st # 가장 가까운 측정소 정보(이름, 속한 시/도) 통째로 저장
+            
+    if not best_station: return None
+
+    # 2. 찾은 측정소가 속한 시/도(sido)의 실시간 데이터 가져오기
+    url_air = "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getCtprvnRltmMesureDnsty"
+    params_air = {
+        'serviceKey': AIR_API_KEY,
+        'returnType': 'json',
+        'numOfRows': '300', 
+        'pageNo': '1',
+        'sidoName': best_station['sido'], # 사용자가 입력한 지역이 아니라, 찾은 측정소의 시/도를 넣음
+        'ver': '1.0'
+    }
+    
+    try:
+        res = requests.get(url_air, params_air)
+        data = res.json()
+        items = data['response']['body']['items']
+        
+        for item in items:
+            if item['stationName'] == best_station['name']:
+                pm10_raw = item.get('pm10Value', '-')
+                pm25_raw = item.get('pm25Value', '-')
+                
+                pm10_str = get_pm_grade(pm10_raw, is_pm10=True)
+                pm25_str = get_pm_grade(pm25_raw, is_pm10=False)
+                
+                return {"pm10": pm10_str, "pm25": pm25_str, "station": best_station['name']}
+    except Exception as e:
+        print(f"미세먼지 실시간 API 에러: {e}")
+    return None
+    
+def create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour, air_info):
     today_tmps = []
     for key, data in fcst_data.items():
         if key.startswith(today_date) and 'TMP' in data:
@@ -491,6 +604,13 @@ def create_weather_embed(full_name, weather_info, fcst_data, today_date, current
     
     rain_val = weather_info.get('rain', '0')
     embed.add_field(name="☔ 1시간 강수량", value=f"**{rain_val}mm**", inline=True)
+
+    if air_info and air_info['pm10'] != '-':
+        embed.add_field(
+            name=f"😷 미세먼지 ({air_info['station']} 측정소)", 
+            value=f"미세먼지: **{air_info['pm10']}**\n초미세먼지: **{air_info['pm25']}**", 
+            inline=False
+        )
         
     embed.add_field(name="📊 오늘의 기온", value=f"최저 **{min_t}℃** / 최고 **{max_t}℃**", inline=False)
     embed.add_field(name="🕒 오늘 시간별 예보", value=hourly_result, inline=False)
@@ -522,13 +642,16 @@ class RegionSelect(discord.ui.Select):
         # 2. 기상청 통신
         weather_info = get_weather(nx, ny)
         fcst_data, today_date, current_hour = get_forecast(nx, ny)
+
+        my_lon, my_lat = get_lon_lat(selected_name)
+        air_info = get_air_quality(my_lon, my_lat)
         
         if not weather_info or not fcst_data:
             await interaction.followup.send("기상청 서버와 통신하는 중 문제가 발생했어. 다시 시도해 봐!")
             return
             
         # 3. 임베드 만들고, 원본 메시지(드롭다운)를 임베드로 교체
-        embed = create_weather_embed(selected_name, weather_info, fcst_data, today_date, current_hour)
+        embed = create_weather_embed(selected_name, weather_info, fcst_data, today_date, current_hour, air_info)
         await interaction.edit_original_response(content=None, embed=embed, view=None)
 
 class RegionSelectView(discord.ui.View):
@@ -558,12 +681,15 @@ async def check_weather(interaction: discord.Interaction, 지역명: str):
     weather_info = get_weather(nx, ny)
     fcst_data, today_date, current_hour = get_forecast(nx, ny)
     
+    my_lon, my_lat = get_lon_lat(full_name)
+    air_info = get_air_quality(my_lon, my_lat)
+    
     if not weather_info or not fcst_data:
         await interaction.followup.send("기상청 서버와 통신하는 중 문제가 발생했어. 다시 시도해 봐!")
         return
 
     # 임베드 공장에서 상자 받아와서 바로 출력
-    embed = create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour)
+    embed = create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour, air_info)
     await interaction.followup.send(embed=embed)
 
 bot.run(TOKEN)
