@@ -50,21 +50,22 @@ async def on_ready():
 # ==========================================
 @bot.tree.command(name="나불이", description="나불이가 일하고 있는지 확인합니다.")
 async def check_status(interaction: discord.Interaction):
-    await interaction.response.send_message("네에~ 나불이 일하고 있어요😆")
+    await interaction.response.send_message("나 불렀어? 나불이 열심히 일하고 있어 😆")
 
 @bot.tree.command(name="핑", description="나불이의 현재 핑을 보여줍니다.")
 async def check_ping(interaction: discord.Interaction):
     ping_ms = round(bot.latency * 1000) # 1000을 곱하는 이유는 초에서 밀리초 변환
-    await interaction.response.send_message(f"🏓 퐁!\n나불이 반응 속도: {ping_ms}ms")
+    await interaction.response.send_message(f"🏓 퐁!\n`나불이의 반응 속도: {ping_ms}ms`")
 
 @bot.tree.command(name="골라", description="선택지를 띄어쓰기로 구분하여 입력하면 나불이가 하나를 골라줍니다.")
-async def choose_for_me(interaction: discord.Interaction, option: str):
+@app_commands.describe(선택지="선택지를 띄어쓰기로 구분하여 입력하세요.")
+async def choose_for_me(interaction: discord.Interaction, 선택지: str):
     # 1. 사용자가 입력한 문자열을 띄어쓰기 기준으로 잘라서 리스트로 만듦
-    options = option.split()
+    options = 선택지.split()
 
     # 2. 선택지가 1개밖에 없거나 안 적었다면 경고
     if len(options) < 2:
-        await interaction.response.send_message("선택지를 2개 이상 입력해야 골라줄 수 있어! (예: '/골라 짜장면 짬뽕')")
+        await interaction.response.send_message("선택지를 2개 이상 입력해야 골라줄 수 있어!\n(예: /골라 짜장면 짬뽕)")
         return
     
     # 3. random.choice()로 리스트 안의 항목 중 하나를 무작위로 뽑음
@@ -178,7 +179,7 @@ def get_wordle_reminder_message(guild):
     else:
         return "오늘은 모두 워들을 완료했네!"
 
-@bot.tree.command(name="워들재촉", description="아직 워들을 안 한 사람들을 멘션해서 재촉합니다.")
+@bot.tree.command(name="워들재촉", description="아직 워들을 안 한 사람을 멘션해서 재촉합니다.")
 async def urge_wordle(interaction: discord.Interaction):
     # 위 함수를 불러와서 보낼 메시지를 받아옴
     msg = get_wordle_reminder_message(interaction.guild)
@@ -223,37 +224,89 @@ area_data = [] # 봇이 켜질 때 전국 지역 좌표를 담아둘 바구니
 
 # CSV 파일을 읽어서 메모리에 장전하는 함수
 def load_weather_area():
-    # 만약 한글이 깨지거나 에러나면 'cp949' 대신 'utf-8'로 바꾸기
+    global area_data
+    area_data = [] 
+    
     with open('weather_area.csv', 'r', encoding='cp949') as f:
         reader = csv.reader(f)
-        next(reader) # 첫 번째 줄(제목 헤더)은 건너뛰기
+        next(reader) 
         
         for row in reader:
-            # 열 순서: row[2]=1단계(시/도), row[3]=2단계(구/군), row[4]=3단계(동/면)
             area_1 = row[2] if row[2] else ""
             area_2 = row[3] if row[3] else ""
             area_3 = row[4] if row[4] else ""
             
+            # CSV 파일에 '용인시수지구' 처럼 붙어있는 문제 해결
+            if "시" in area_2 and area_2.endswith("구") and " " not in area_2:
+                area_2 = area_2.replace("시", "시 ")
+            
+            areas = [a for a in [area_1, area_2, area_3] if a]
+            full_name = " ".join(areas)
+            depth = len(areas) # 행정구역 깊이 저장 (1단계, 2단계, 3단계)
+            
             nx = row[5]
             ny = row[6]
             
-            # "대구광역시 북구 산격1동" 처럼 하나의 문자열로 합치기
-            full_name = f"{area_1} {area_2} {area_3}".strip()
-            
-            if full_name: # 빈 줄이 아니면 리스트에 추가
-                area_data.append({"name": full_name, "nx": nx, "ny": ny})
+            if full_name:
+                # 쪼개진 데이터(a1, a2, a3)와 깊이(depth)도 메모리에 같이 저장
+                area_data.append({
+                    "name": full_name, 
+                    "a1": area_1, "a2": area_2, "a3": area_3, 
+                    "depth": depth, "nx": nx, "ny": ny
+                })
 
-# 검색어("대구 북구")가 들어오면 좌표를 찾아줌
 def search_coordinates(query):
-    keywords = query.split() # ["대구광역시", "북구"]로 쪼갬
+    # 축약어를 정식 명칭으로 번역
+    query = query.replace("경북", "경상북도").replace("경남", "경상남도")
+    query = query.replace("충북", "충청북도").replace("충남", "충청남도")
+    query = query.replace("전남", "전라남도")
+    # 전북과 제주는 해당 글자로 시작하기 때문에 굳이 안 바꿈
+
+    keywords = query.split() 
+    query_no_space = query.replace(" ", "") 
+    
+    matches = []
     
     for area in area_data:
-        # 사용자가 입력한 단어들이 지역 이름(area['name'])에 모두 포함되어 있는지 확인
-        # (예: "대구"도 있고 "북구"도 있으면 매칭 성공)
-        if all(keyword in area['name'] for keyword in keywords):
-            return area['nx'], area['ny'], area['name']
+        match_all = True
+        # 각 구역이 해당 단어로 '시작'하는지 검사
+        for kw in keywords:
+            if not (area['a1'].startswith(kw) or area['a2'].startswith(kw) or area['a3'].startswith(kw)):
+                match_all = False
+                break
+                
+        if match_all:
+            matches.append(area)
             
-    return None, None, None # 못 찾았을 경우
+    # Track 2: 띄어쓰기 무시 모드 (위에서 못 찾았을 때만 가동)
+    if not matches:
+        for area in area_data:
+            area_name_no_space = area['name'].replace(" ", "")
+            # startswith로 엄격하게 검사해서 '지구'가 '수지구'를 못 잡게 함
+            if area_name_no_space.startswith(query_no_space):
+                matches.append(area)
+                
+    if not matches:
+        return None, None, None, "not_found"
+
+    # 중복 결과 처리
+    # 1. 뎁스가 얕은 순서대로 정렬
+    matches.sort(key=lambda x: x['depth'])
+    
+    # 2. 1등과 뎁스가 똑같은 후보들을 모음
+    best_depth = matches[0]['depth']
+    top_candidates = [m for m in matches if m['depth'] == best_depth]
+    
+    # 3. 1등 후보가 여러 개라면?
+    if len(top_candidates) > 1:
+        # 중복된 이름을 제거하고 리스트로 만듦
+        candidate_names = list(dict.fromkeys([c['name'] for c in top_candidates]))
+        if len(candidate_names) > 1:
+            # 좌표 대신 '중복'이라는 상태와 예시 리스트를 반환
+            return None, None, None, candidate_names[:25] 
+
+    best = matches[0]
+    return best['nx'], best['ny'], best['name'], "success"
 
 def get_weather(nx, ny):
     url = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
@@ -386,54 +439,30 @@ def get_forecast(nx, ny):
     except Exception as e:
         print(f"예보 API 에러: {e}")
         return None, None, None
-
-@bot.tree.command(name="날씨", description="원하는 지역의 날씨를 확인합니다.")
-@app_commands.describe(지역명="지역명을 입력하세요. (예: 서울특별시, 해운대구, 대구광역시 북구 산격1동)")
-async def check_weather(interaction: discord.Interaction, 지역명: str):
-    # API 통신에 시간이 소요될 수 있어서 '생각 중...' 표시
-    await interaction.response.defer()
-
-    # 1. 사용자가 입력한 지역명으로 좌표를 검색
-    nx, ny, full_name = search_coordinates(지역명)
     
-    # 못 찾았을 경우
-    if not nx:
-        await interaction.followup.send(f"'{지역명}'에 해당하는 지역을 찾을 수 없어! 😭\n제대로 입력했는지 확인해봐!")
-        return
-        
-    weather_info = get_weather(nx, ny)
-    fcst_data, today_date, current_hour = get_forecast(nx, ny)
-
-    if not weather_info or not fcst_data:
-        await interaction.followup.send("기상청 서버와 통신하는 중 문제가 발생했어!")
-        return
-    
-    # --- 오늘 최고/최저 기온 계산 로직 ---
+def create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour):
     today_tmps = []
     for key, data in fcst_data.items():
         if key.startswith(today_date) and 'TMP' in data:
-            today_tmps.append(float(data['TMP']))
+            today_tmps.append(int(data['TMP']))
             
     min_t = min(today_tmps) if today_tmps else "-"
     max_t = max(today_tmps) if today_tmps else "-"
 
-    # --- 시간별 예보 텍스트 만들기 ---
     hourly_texts = []
-    sorted_keys = sorted(fcst_data.keys()) # 시간순으로 정렬
+    sorted_keys = sorted(fcst_data.keys()) 
     
     for key in sorted_keys:
         date, time = key.split('_')
         data = fcst_data[key]
         
-        # 오늘 날짜이면서 현재 시간 이후인 데이터 추가
         if date == today_date and int(time) > int(current_hour):
             if 'TMP' in data:
                 tmp = data['TMP']
-                pop = data.get('POP', '0') # 강수확률
-                sky = data.get('SKY', '1') # 하늘 상태
-                pty = data.get('PTY', '0') # 강수 형태
+                pop = data.get('POP', '0')
+                sky = data.get('SKY', '1')
+                pty = data.get('PTY', '0')
                 
-                # 날씨 상태에 맞춰 아이콘 지정
                 icon = "☀️"
                 if pty == '0':
                     if sky == '3': icon = "⛅"
@@ -446,34 +475,95 @@ async def check_weather(interaction: discord.Interaction, 지역명: str):
                 hour_str = f"{time[:2]}시"
                 hourly_texts.append(f"`{hour_str}` {icon} **{tmp}℃** (☔ {pop}%)")
                 
-    # 만약 밤 11시라 남은 예보가 없다면 안내 문구 출력
     hourly_result = "\n".join(hourly_texts) if hourly_texts else "오늘의 남은 예보가 없습니다. 🌙"
 
-    # --- 날씨 앱 스타일 임베드 조립 ---
     embed = discord.Embed(
         title=f"📍 {full_name} 날씨 정보", 
         color=0x4CE2EC,
         timestamp=datetime.datetime.now(KST)
     )
     
-    # 첫째 줄: 현재 날씨
-    embed.add_field(name="🌡️ 기온", value=f"**{weather_info['temp']}℃**", inline=True)
+    embed.add_field(name="🌡️ 현재 기온", value=f"**{weather_info['temp']}℃**", inline=True)
     embed.add_field(name="💧 상태", value=f"**{weather_info['status']}**", inline=True)
     embed.add_field(name="💦 습도", value=f"**{weather_info['humidity']}%**", inline=True)
     
-    # 둘째 줄: 바람 & 강수량 & 최고/최저 기온
     embed.add_field(name="🌬️ 바람", value=f"**{weather_info['wind_dir_text']}풍 {weather_info['wind']}m/s**", inline=True)
     
     rain_val = weather_info.get('rain', '0')
     embed.add_field(name="☔ 1시간 강수량", value=f"**{rain_val}mm**", inline=True)
-    
-    # 셋째 줄: 시간별 예보
+        
     embed.add_field(name="📊 오늘의 기온", value=f"최저 **{min_t}℃** / 최고 **{max_t}℃**", inline=False)
-    
     embed.add_field(name="🕒 오늘 시간별 예보", value=hourly_result, inline=False)
-    
     embed.set_footer(text="제공: 대한민국 기상청")
+    
+    return embed
 
+class RegionSelect(discord.ui.Select):
+    def __init__(self, candidates):
+        # 후보 리스트를 받아서 드롭다운 옵션으로 만듦
+        options = []
+        for name in candidates:
+            options.append(discord.SelectOption(label=name))
+            
+        super().__init__(placeholder="정확한 지역을 선택해주세요!", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer() # 클릭하자마자 생각 중 띄우기
+        
+        selected_name = self.values[0] # 사용자가 클릭한 지역명
+        
+        # 1. 엑셀 데이터에서 선택한 지역의 좌표 다시 찾기
+        nx, ny = None, None
+        for area in area_data:
+            if area['name'] == selected_name:
+                nx, ny = area['nx'], area['ny']
+                break
+                
+        # 2. 기상청 통신
+        weather_info = get_weather(nx, ny)
+        fcst_data, today_date, current_hour = get_forecast(nx, ny)
+        
+        if not weather_info or not fcst_data:
+            await interaction.followup.send("기상청 서버와 통신하는 중 문제가 발생했어. 다시 시도해 봐!")
+            return
+            
+        # 3. 임베드 만들고, 원본 메시지(드롭다운)를 임베드로 교체
+        embed = create_weather_embed(selected_name, weather_info, fcst_data, today_date, current_hour)
+        await interaction.edit_original_response(content=None, embed=embed, view=None)
+
+class RegionSelectView(discord.ui.View):
+    def __init__(self, candidates):
+        super().__init__(timeout=60) # 60초 지나면 메뉴 만료되도록 설정
+        self.add_item(RegionSelect(candidates))
+
+# 임베드 출력 명령어
+@bot.tree.command(name="날씨", description="원하는 지역의 현재 상세 날씨와 시간별 예보를 확인합니다")
+@app_commands.describe(지역명="지역명을 입력하세요. 동의 경우 행정동으로 입력하세요.")
+async def check_weather(interaction: discord.Interaction, 지역명: str):
+    await interaction.response.defer()
+
+    nx, ny, full_name, status = search_coordinates(지역명)
+    
+    if status == "not_found":
+        await interaction.followup.send(f"**'{지역명}'**에 해당하는 지역을 찾을 수 없어! 😭\n오타가 없는지, 행정동으로 입력했는지 확인해봐!")
+        return
+    
+    # 중복일 경우
+    elif status != "success":
+        view = RegionSelectView(status)
+        await interaction.followup.send(f"**'{지역명}'**(으)로 검색된 지역이 여러 개야! 🤔\n아래 메뉴에서 원하는 곳을 정확히 선택해줘!", view=view)
+        return
+        
+    # 단일 지역으로 검색 성공했을 때
+    weather_info = get_weather(nx, ny)
+    fcst_data, today_date, current_hour = get_forecast(nx, ny)
+    
+    if not weather_info or not fcst_data:
+        await interaction.followup.send("기상청 서버와 통신하는 중 문제가 발생했어. 다시 시도해 봐!")
+        return
+
+    # 임베드 공장에서 상자 받아와서 바로 출력
+    embed = create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour)
     await interaction.followup.send(embed=embed)
 
 bot.run(TOKEN)
