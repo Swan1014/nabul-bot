@@ -7,6 +7,9 @@ import datetime
 import random
 import requests
 import csv
+import re
+import io
+from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -86,49 +89,65 @@ async def choose_for_me(interaction: discord.Interaction, 선택지: str):
 # ==========================================
 done_today = set() # 오늘 워들을 한 사람의 ID를 저장할 바구니
 
-@bot.event
+def extract_wordle_players(content):
+    # 1. is, are, was, were playing 뒤에 붙는 말들을 통째로 날려버림
+    clean_str = re.sub(r'\s+(is|are|was|were)\s+playing.*', '', content)
+    
+    # 2. 여러 명일 때 붙는 'and'를 쉼표(',')로 바꿈
+    clean_str = clean_str.replace("and", ",")
+    
+    # 3. 쉼표를 기준으로 조각조각 낸 다음, 양옆 띄어쓰기를 없애고 빈칸이 아닌 것만 모음
+    nicknames = [name.strip() for name in clean_str.split(",") if name.strip()]
+    return nicknames
+
 async def on_message(message):
     if message.author.bot:
-        if message.author.name == "Wordle" and "was playing" in message.content:
-            nickname = message.content.replace(" was playing", "").strip()
+        # was/were 따지지 않고 'playing'이라는 단어만 있으면 통과
+        if message.author.name == "Wordle" and "playing" in message.content:
+            nicknames = extract_wordle_players(message.content)
             
-            found_user = None
-            for member in message.guild.members:
-                if member.display_name == nickname or member.name == nickname:
-                    found_user = member
-                    break
+            found_users = []
+            for nickname in nicknames:
+                # 쪼개진 닉네임들을 하나씩 서버 멤버와 대조
+                for member in message.guild.members:
+                    if member.display_name == nickname or member.name == nickname:
+                        if member.id not in done_today: # 중복 방지
+                            done_today.add(member.id)
+                            found_users.append(member.display_name)
+                        break # 찾았으면 다음 사람 찾으러 이동!
             
-            if found_user:
-                done_today.add(found_user.id)
-                await message.channel.send(f"{found_user.display_name}, 워들 완료 확인! (현재 {len(done_today)}명 완료)")
+            # 새롭게 워들을 완료한 사람이 한 명이라도 있다면 알림 띄우기
+            if found_users:
+                users_str = ", ".join(found_users) # "홍길동, 김철수" 형태로 묶기
+                await message.channel.send(f"오! {users_str} 워들 완료 확인! (현재 {len(done_today)}명 완료)")
         return
 
     if "Wordle" in message.content and "🟩" in message.content:
-        done_today.add(message.author.id)
-        await message.channel.send(f"{message.author.display_name}, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
+        if message.author.id not in done_today:
+            done_today.add(message.author.id)
+            await message.channel.send(f"{message.author.display_name}, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
 
     await bot.process_commands(message)
 
 # 메시지가 수정(Edit)되었을 때 발동하는 이벤트
 @bot.event
 async def on_message_edit(before, after):
-    # before는 수정 전 메시지, after는 수정 후 메시지
     if after.author.bot:
-        # 워들 봇이 메시지를 수정했고, 수정된 내용에 "was playing"이 있다면
-        if after.author.name == "Wordle" and "was playing" in after.content:
-            nickname = after.content.replace(" was playing", "").strip()
+        if after.author.name == "Wordle" and "playing" in after.content:
+            nicknames = extract_wordle_players(after.content)
             
-            found_user = None
-            for member in after.guild.members:
-                if member.display_name == nickname or member.name == nickname:
-                    found_user = member
-                    break
+            found_users = []
+            for nickname in nicknames:
+                for member in after.guild.members:
+                    if member.display_name == nickname or member.name == nickname:
+                        if member.id not in done_today:
+                            done_today.add(member.id)
+                            found_users.append(member.display_name)
+                        break
             
-            if found_user:
-                # 이미 완료 처리된 사람인지 한 번 더 확인 (중복 알림 방지)
-                if found_user.id not in done_today:
-                    done_today.add(found_user.id)
-                    await after.channel.send(f"오! {found_user.display_name}님 워들 완료! (수정된 메시지 감지, 현재 {len(done_today)}명 완료)")
+            if found_users:
+                users_str = ", ".join(found_users)
+                await after.channel.send(f"오! {users_str}님 워들 완료! (현재 {len(done_today)}명 완료)")
 
 @bot.tree.command(name="워들", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
 async def check_wordle_status(interaction: discord.Interaction):
@@ -691,5 +710,515 @@ async def check_weather(interaction: discord.Interaction, 지역명: str):
     # 임베드 공장에서 상자 받아와서 바로 출력
     embed = create_weather_embed(full_name, weather_info, fcst_data, today_date, current_hour, air_info)
     await interaction.followup.send(embed=embed)
+
+# ==========================================
+# 윷놀이 명령어
+# ==========================================
+
+# 1. 플레이어의 상태를 저장하는 데이터 클래스
+class YutPlayer:
+    def __init__(self, member: discord.Member, is_p1: bool):
+        self.member = member
+        self.emoji = "🔴" if is_p1 else "🔵"  # P1은 빨강, P2는 파랑
+        self.horses = [-1, -1, -1, -1]       # 말 4개 (-1: 대기실, 99: 골인, 0~29: 보드판 좌표)
+        self.score = 0                       # 골인한 말의 개수
+        self.yut_skill = "랜덤 윷 스킬"       # (임시) 나중에 랜덤 부여 로직 추가
+        self.board_skill = "랜덤 말 스킬"     # (임시) 나중에 랜덤 부여 로직 추가
+        self.move_list = []                  # 예: ['도', '윷', '모']
+        self.throw_count = 1                 # 윷을 던질 수 있는 남은 횟수 (기본 1회)
+        self.used_skill = False              # 이번 턴에 스킬을 썼는지 여부
+
+# 2. 게임판 UI (버튼과 드롭다운을 관리하는 View)
+class HorseSelect(discord.ui.Select):
+    def __init__(self, player):
+        options = []
+        # 현재 플레이어의 말 4개 중 골인(99)하지 않은 말들을 그룹화해서 보여줌
+        unique_positions = set(pos for pos in player.horses if pos != 99)
+        
+        for pos in unique_positions:
+            count = player.horses.count(pos) # 업힌 말 개수 파악
+            
+            if pos == -1:
+                label = f"대기실에 있는 말 ({count}개)"
+                desc = "아직 출발하지 않은 말입니다."
+            else:
+                label = f"윷판 {pos}번 칸에 있는 말 ({count}개)"
+                desc = "클릭해서 이동 가능한 칸을 확인하세요."
+                
+            options.append(discord.SelectOption(label=label, description=desc, value=str(pos)))
+            
+        super().__init__(placeholder="👇 움직일 말을 선택하세요!", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: YutGameView = self.view
+        # 선택한 말의 현재 위치를 View에 저장하고 화면을 업데이트(버튼 생성)함
+        view.selected_horse_pos = int(self.values[0])
+        await view.update_ui(interaction)
+
+class YutGameView(discord.ui.View):
+    def __init__(self, p1: discord.Member, p2: discord.Member):
+        super().__init__(timeout=None) # 시간 제한 없음
+        self.player1 = YutPlayer(p1, True)
+        self.player2 = YutPlayer(p2, False)
+        self.current_player = self.player1 # P1부터 시작!
+        self.selected_horse_pos = None
+        self.setup_buttons()
+
+    def generate_board_image(self):
+        img = Image.new('RGBA', (500, 500), color=(40, 44, 52, 255))
+        draw = ImageDraw.Draw(img, 'RGBA')
+
+        coords = {
+            0: (450, 450), 1: (450, 370), 2: (450, 290), 3: (450, 210), 4: (450, 130),
+            5: (450, 50), 6: (370, 50), 7: (290, 50), 8: (210, 50), 9: (130, 50),
+            10: (50, 50), 11: (50, 130), 12: (50, 210), 13: (50, 290), 14: (50, 370),
+            15: (50, 450), 16: (130, 450), 17: (210, 450), 18: (290, 450), 19: (370, 450),
+            21: (383, 117), 22: (317, 183), 23: (250, 250), 24: (183, 317), 25: (117, 383),
+            26: (117, 117), 27: (183, 183), 28: (317, 317), 29: (383, 383)
+        }
+
+        line_color = (130, 140, 160)
+        draw.line([(450,450), (450,50), (50,50), (50,450), (450,450)], fill=line_color, width=8)
+        draw.line([(450,50), (50,450)], fill=line_color, width=8)
+        draw.line([(50,50), (450,450)], fill=line_color, width=8)
+
+        def draw_arrow(cx, cy, direction):
+            ac = (160, 110, 0)
+            w = 6
+            if direction == 'dl': # ↙️
+                draw.line([(cx+7, cy-7), (cx-3, cy+3)], fill=ac, width=w)
+                draw.polygon([(cx-7, cy+7), (cx-7, cy-3), (cx+3, cy+7)], fill=ac)
+            elif direction == 'dr': # ↘️
+                draw.line([(cx-7, cy-7), (cx+3, cy+3)], fill=ac, width=w)
+                draw.polygon([(cx+7, cy+7), (cx+7, cy-3), (cx-3, cy+7)], fill=ac)
+            elif direction == 'r': # ➡️
+                draw.line([(cx-9, cy), (cx+4, cy)], fill=ac, width=w)
+                draw.polygon([(cx+9, cy), (cx+1, cy-7), (cx+1, cy+7)], fill=ac)
+
+        # ⭐️ 윈도우 & 리눅스 호환 폰트 로드 시스템
+        font_options = [
+            "arial.ttf", "malgun.ttf", 
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            "DejaVuSans.ttf"
+        ]
+        
+        # 말 위의 숫자 뱃지용 폰트 (크기 24)
+        badge_font = None
+        for font_name in font_options:
+            try: badge_font = ImageFont.truetype(font_name, 24); break
+            except IOError: continue
+        if badge_font is None: badge_font = ImageFont.load_default()
+
+        # ⭐️ [새로 추가] 칸 안에 새겨넣을 노드 번호용 폰트 (크기 16으로 큼직하고 짱짱하게!)
+        node_font = None
+        for font_name in font_options:
+            try: node_font = ImageFont.truetype(font_name, 20); break
+            except IOError: continue
+        if node_font is None: node_font = ImageFont.load_default()
+
+        # 5. 각 좌표에 동그라미 그리고 그 위에 숫자 얹기
+        for i in range(30):
+            if i not in coords: continue
+            cx, cy = coords[i]
+            r = 23 
+            
+            fill_color = (235, 240, 245)
+            out_color = (160, 170, 190)
+            
+            if i in [5, 10, 15]: 
+                fill_color = (255, 225, 60)
+                out_color = (220, 160, 0)
+            elif i == 23:
+                fill_color = (255, 150, 50)
+                out_color = (210, 100, 0)
+            elif i == 0:
+                fill_color = (80, 230, 120)
+                out_color = (40, 170, 80)
+                
+            draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=fill_color, outline=out_color, width=4)
+            draw.ellipse([cx-r+5, cy-r+5, cx+r-5, cy+r-5], outline=(255,255,255, 180), width=2)
+            
+            # 화살표 먼저 밑바탕에 그리기
+            if i == 5: draw_arrow(cx, cy, 'dl')
+            elif i == 10: draw_arrow(cx, cy, 'dr')
+            elif i == 15: draw_arrow(cx, cy, 'r')
+            elif i == 23: draw_arrow(cx, cy, 'dr')
+
+            # ⭐️ [핵심] 화살표 위에 숫자를 덮어씌워 정중앙 정렬로 그리기!
+            text_str = str(i)
+            try:
+                # 텍스트의 실제 픽셀 크기를 구해서 오차 없는 정중앙 좌표 계산
+                bbox = node_font.getbbox(text_str)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                tx = cx - tw / 2 - bbox[0]
+                ty = cy - th / 2 - bbox[1]
+            except:
+                tx, cy = cx - 5, cy - 7 # 예외 대비책
+                
+            # 가독성을 위해 노란색/주황색 특수 칸은 글씨를 완전 검은색(10,10,10)으로, 일반 칸은 짙은 남회색으로 지정
+            text_color = (10, 10, 10) if i in [5, 10, 15, 23, 0] else (50, 60, 75)
+            draw.text((tx, ty), text_str, fill=text_color, font=node_font)
+
+        # 6. 플레이어 말 그리기 헬퍼 함수
+        def draw_horse(pos, color_rgb, count):
+            if 0 <= pos < 30:
+                cx, cy = coords[pos]
+                hr = 15 
+                draw.ellipse([cx-hr+2, cy-hr+2, cx+hr+2, cy+hr+2], fill=(0,0,0, 80))
+                draw.ellipse([cx-hr, cy-hr, cx+hr, cy+hr], fill=color_rgb, outline=(255,255,255,255), width=3)
+                draw.ellipse([cx-5, cy-5, cx+5, cy+5], fill=(255,255,255,220))
+                
+                if count > 1:
+                    bx, by = cx + 13, cy + 13 
+                    badge_r = 13 
+                    draw.ellipse([bx-badge_r, by-badge_r, bx+badge_r, by+badge_r], fill=(30, 30, 30, 255), outline=(255, 255, 255, 255), width=2)
+                    draw.text((bx-7, by-13), str(count), fill=(255, 255, 255, 255), font=badge_font)
+
+        # 말 렌더링
+        p2_board = [h for h in self.player2.horses if 0 <= h < 30]
+        p2_counts = {pos: p2_board.count(pos) for pos in set(p2_board)}
+        for pos, count in p2_counts.items(): draw_horse(pos, (85, 170, 255, 255), count)
+
+        p1_board = [h for h in self.player1.horses if 0 <= h < 30]
+        p1_counts = {pos: p1_board.count(pos) for pos in set(p1_board)}
+        for pos, count in p1_counts.items(): draw_horse(pos, (255, 85, 85, 255), count)
+
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+        return discord.File(buffer, filename="yut_board.png")
+    
+    def setup_buttons(self):
+        self.clear_items()
+        
+        # 1. 윷 던지기 기회가 있을 때
+        if self.current_player.throw_count > 0:
+            btn_throw = discord.ui.Button(label="윷 던지기", style=discord.ButtonStyle.primary, emoji="🎲")
+            btn_throw.callback = self.btn_throw_callback
+            self.add_item(btn_throw)
+            
+        # 2. 던지기 기회는 없고, 쓸 수 있는 윷 결과가 있을 때
+        elif self.current_player.move_list:
+            self.add_item(HorseSelect(self.current_player))
+            
+            # 3. 드롭다운에서 말을 선택했다면?
+            if self.selected_horse_pos is not None:
+                unique_moves = set(self.current_player.move_list)
+                valid_move_exists = False # ⭐️ 이동 가능한 경로가 있는지 체크하는 변수
+                
+                for yut_str in unique_moves:
+                    move_val = yut_to_number(yut_str)
+                    dest = calculate_arrival(self.selected_horse_pos, move_val)
+                    
+                    if dest is not None: # ⭐️ None이 아닐 때만 버튼 생성!
+                        valid_move_exists = True
+                        dest_label = "🏁 골인하기" if dest == 99 else f"📍 {dest}번 칸으로 이동"
+                        btn_move = discord.ui.Button(label=f"{dest_label} ({yut_str})", style=discord.ButtonStyle.success)
+                        btn_move.callback = lambda i, d=dest, y=yut_str: self.btn_move_callback(i, d, y)
+                        self.add_item(btn_move)
+                        
+                # ⭐️ 이동 가능한 버튼이 단 한 개도 만들어지지 않았다면? (예: 대기실 말에 빽도만 남은 경우)
+                if not valid_move_exists:
+                    btn_error = discord.ui.Button(label="❌ 이 말은 이동 불가", style=discord.ButtonStyle.secondary, disabled=True)
+                    self.add_item(btn_error)
+                        
+        # ⭐️ 빽도만 나와서 어쩔 수 없이 턴을 버려야 할 때를 위한 스킵 버튼
+        btn_skip = discord.ui.Button(label="턴 넘기기", style=discord.ButtonStyle.danger, row=4)
+        btn_skip.callback = self.btn_skip_callback
+        self.add_item(btn_skip)
+
+    # ⭐️ 화면을 새로고침하는 헬퍼 함수
+    async def update_ui(self, interaction: discord.Interaction, message_text=None):
+        # ⭐️ 1. 게임 종료(승리) 판정! 4점을 먼저 내면 즉시 게임 끝!
+        if self.player1.score >= 4 or self.player2.score >= 4:
+            winner = self.player1 if self.player1.score >= 4 else self.player2
+            
+            self.clear_items() # 텅 빈 드롭다운을 만들지 않도록 모든 버튼/메뉴 싹 지우기
+            image_file = self.generate_board_image()
+            embed = self.create_board_embed()
+            
+            # 승리 축하 메시지 추가
+            embed.color = 0x00FF00 # 임베드 띠 색상을 영롱한 초록색으로 변경
+            embed.add_field(name="🏆 게임 종료 🏆", value=f"🎉 **{winner.member.display_name}** 님이 4점을 달성하여 최종 승리했습니다!", inline=False)
+            
+            await interaction.response.edit_message(content=f"🎊 {winner.member.mention} 님의 승리!!", attachments=[image_file], embed=embed, view=None)
+            self.stop() # ⭐️ 더 이상 상호작용을 받지 않고 봇의 대기 상태를 종료함
+            return
+
+        # 2. 게임이 안 끝났다면 평소처럼 UI 세팅
+        self.setup_buttons()
+        image_file = self.generate_board_image()
+        embed = self.create_board_embed()
+        
+        content = message_text if message_text else f"현재 턴: {self.current_player.member.mention}"
+        await interaction.response.edit_message(content=content, attachments=[image_file], embed=embed, view=self)
+
+    # [콜백] 윷 던지기 버튼 눌렀을 때
+    async def btn_throw_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player.member.id:
+            return await interaction.response.send_message("당신의 턴이 아닙니다!", ephemeral=True)
+            
+        import random
+        result = random.choice(["도", "개", "걸", "윷", "모", "빽도"])
+        
+        self.current_player.move_list.append(result)
+        self.current_player.throw_count -= 1
+        
+        # 윷이나 모가 나오면 기회 +1
+        if result in ["윷", "모"]: self.current_player.throw_count += 1
+            
+        self.selected_horse_pos = None # 윷을 새로 던지면 말 선택 초기화
+        await self.update_ui(interaction, f"🎲 **{result}**가 나왔습니다!")
+
+    # ⭐️ [핵심 콜백] 목적지 이동 버튼 눌렀을 때 (이동, 업기, 잡기 판정!)
+    async def btn_move_callback(self, interaction: discord.Interaction, dest: int, used_yut: str):
+        if interaction.user.id != self.current_player.member.id:
+            return await interaction.response.send_message("당신의 턴이 아닙니다!", ephemeral=True)
+            
+        me = self.current_player
+        enemy = self.player2 if me == self.player1 else self.player1
+        start_pos = self.selected_horse_pos
+        
+        # ⭐️ 1. 말 이동 (대기실 출발 vs 윷판 이동 로직 분리!)
+        moved_count = 0
+        if start_pos == -1:
+            # [대기실 출발] 위치가 -1인 말 중에서 딱 '1개'만 찾아서 보냄!
+            for i in range(4):
+                if me.horses[i] == -1:
+                    me.horses[i] = dest
+                    moved_count = 1
+                    break # ⭐️ 1개만 옮기고 즉시 탈출!
+        else:
+            # [윷판 이동] 이미 판에 나와 있는 말은 같은 칸에 있는(업힌) 애들 전부 묶어서 이동!
+            for i in range(4):
+                if me.horses[i] == start_pos:
+                    me.horses[i] = dest
+                    moved_count += 1
+                
+        # 2. 이동 리스트에서 사용한 윷 지우기
+        me.move_list.remove(used_yut)
+        self.selected_horse_pos = None # 이동 후 선택 초기화
+        
+        msg = f"🐎 말이 {dest}번 칸으로 이동했습니다! ({used_yut} 사용)"
+        
+        # 3. 골인 판정
+        if dest == 99:
+            me.score += moved_count
+            msg = f"🎉 {moved_count}개의 말이 **골인**했습니다! (+{moved_count}점)"
+            
+        # 4. 잡기 판정 (도착한 곳에 적의 말이 있다면?)
+        elif dest != -1 and dest in enemy.horses:
+            catch_count = 0
+            for i in range(4):
+                if enemy.horses[i] == dest:
+                    enemy.horses[i] = -1 # 대기실로 쫓아냄
+                    catch_count += 1
+            me.throw_count += 1 # ⭐️ 상대 말을 잡으면 윷 던지기 기회 +1 !
+            msg = f"⚔️ **상대방의 말을 {catch_count}개 잡았습니다!!** (한 번 더 던질 수 있습니다 🎲)"
+            
+        # 5. 턴 종료 판정 (던질 기회도 없고, 남은 리스트도 없으면 상대 턴으로!)
+        if me.throw_count == 0 and len(me.move_list) == 0:
+            self.current_player = enemy
+            self.current_player.throw_count = 1
+            self.current_player.used_skill = False
+            self.current_player.move_list.clear()
+            msg += f"\n🔄 턴이 종료되어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
+            
+        await self.update_ui(interaction, msg)
+
+    # 턴 넘기기 버튼 로직
+    async def btn_skip_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player.member.id: return
+        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
+        self.current_player.throw_count = 1
+        self.current_player.move_list.clear()
+        self.selected_horse_pos = None
+        await self.update_ui(interaction, f"⏭️ 턴을 강제로 넘겼습니다.")
+
+    # ⭐️ [수정됨] 임베드에 텍스트 대신 방금 만든 이미지를 첨부!
+    def create_board_embed(self):
+        embed = discord.Embed(
+            title="🎲 메이플 초능력 윷놀이 🎲", 
+            description=f"현재 턴: {self.current_player.emoji} **{self.current_player.member.display_name}**의 차례입니다!",
+            color=0xFF9900
+        )
+        
+        # 임베드 안에 진짜 이미지를 장착!
+        embed.set_image(url="attachment://yut_board.png") 
+        
+        p1_horses = "🔴" * self.player1.horses.count(-1) + " (대기)"
+        p1_score = "⭐" * self.player1.score + f" ({self.player1.score}점)"
+        p1_info = f"**윷 스킬:** {self.player1.yut_skill}\n**말 스킬:** {self.player1.board_skill}\n**대기석:** {p1_horses}\n**골인:** {p1_score}"
+        
+        p2_horses = "🔵" * self.player2.horses.count(-1) + " (대기)"
+        p2_score = "⭐" * self.player2.score + f" ({self.player2.score}점)"
+        p2_info = f"**윷 스킬:** {self.player2.yut_skill}\n**말 스킬:** {self.player2.board_skill}\n**대기석:** {p2_horses}\n**골인:** {p2_score}"
+        
+        embed.add_field(name=f"🔴 {self.player1.member.display_name}", value=p1_info, inline=True)
+        embed.add_field(name=f"🔵 {self.player2.member.display_name}", value=p2_info, inline=True)
+        
+        move_str = " ".join([f"[{m}]" for m in self.current_player.move_list]) if self.current_player.move_list else "(비어 있음)"
+        embed.add_field(name="🎯 현재 이동 리스트", value=f"➡️ **{move_str}**\n*(남은 윷 던지기 기회: {self.current_player.throw_count}번)*", inline=False)
+        return embed
+
+    # [버튼 1] 윷 던지기
+    @discord.ui.button(label="윷 던지기", style=discord.ButtonStyle.primary, emoji="🎲")
+    async def btn_throw(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.current_player.member.id:
+            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+            return
+            
+        if self.current_player.throw_count <= 0:
+            await interaction.response.send_message("더 이상 윷을 던질 수 없습니다. 이동할 말을 선택하세요!", ephemeral=True)
+            return
+
+        # TODO: 윷 확률 계산 로직 (모 아니면 도 등 스킬 효과 반영)
+        # 임시로 랜덤 결과만 띄워놓음
+        import random
+        result = random.choice(["도", "개", "걸", "윷", "모", "빽도"])
+        
+        self.current_player.move_list.append(result)
+        self.current_player.throw_count -= 1
+        
+        # 윷이나 모가 나오면 던지기 기회 +1
+        if result in ["윷", "모"]:
+            self.current_player.throw_count += 1
+
+            image_file = self.generate_board_image()
+            await interaction.response.edit_message(attachments=[image_file], embed=self.create_board_embed(), view=self)
+
+    # [버튼 2] 초능력 사용
+    @discord.ui.button(label="초능력 사용", style=discord.ButtonStyle.success, emoji="✨")
+    async def btn_skill(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.current_player.member.id:
+            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+            return
+            
+        if self.current_player.used_skill:
+            await interaction.response.send_message("이번 턴에는 이미 초능력을 사용했습니다!", ephemeral=True)
+            return
+            
+        # TODO: 스킬 선택 드롭다운 UI 띄우기
+        await interaction.response.send_message("초능력 선택 UI가 오픈될 예정입니다. (개발 중 🛠️)", ephemeral=True)
+
+    # [버튼 3] 턴 넘기기 (임시)
+    @discord.ui.button(label="턴 강제 종료", style=discord.ButtonStyle.danger)
+    async def btn_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.current_player.member.id:
+            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+            return
+            
+        # 턴 교체 로직
+        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
+        self.current_player.throw_count = 1
+        self.current_player.used_skill = False
+        self.current_player.move_list.clear()
+        
+        image_file = self.generate_board_image()
+        await interaction.response.edit_message(attachments=[image_file], embed=self.create_board_embed(), view=self)
+
+# ⭐️ 윷판의 모든 전진 경로를 맵핑한 사전 (현재 위치가 Key)
+# 리스트의 인덱스가 곧 전진하는 칸 수! (예: 1칸 전진 -> path[1])
+FORWARD_PATHS = {
+    # 바깥쪽 테두리 (모서리 출발 제외)
+    0: [0, 99, 99, 99, 99, 99, 99], # 결승점 칸에 안착한 후엔 무조건 초과해야 골인!
+    1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    2: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    4: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    6: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    7: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    8: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    9: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    11: [11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
+    12: [12, 13, 14, 15, 16, 17, 18, 19, 99],
+    13: [13, 14, 15, 16, 17, 18, 19, 99],
+    14: [14, 15, 16, 17, 18, 19, 99],
+    15: [15, 16, 17, 18, 19, 99],
+    16: [16, 17, 18, 19, 99],
+    17: [17, 18, 19, 99],
+    18: [18, 19, 99],
+    19: [19, 99],
+    
+    # ⭐️ [수정] 우상단 꺾임 루트 (5 -> 21 -> 22 -> 23 -> 24 -> 25 -> 15)
+    5: [5, 21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
+    21: [21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
+    22: [22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
+    24: [24, 25, 15, 16, 17, 18, 19, 99],
+    25: [25, 15, 16, 17, 18, 19, 99],
+    
+    # ⭐️ [수정] 좌상단 꺾임 루트 (10 -> 26 -> 27 -> 23 -> 28 -> 29 -> 0)
+    10: [10, 26, 27, 23, 28, 29, 0, 99],
+    26: [26, 27, 23, 28, 29, 0, 99],
+    27: [27, 23, 28, 29, 0, 99],
+    28: [28, 29, 0, 99],
+    29: [29, 0, 99],
+    
+    # ⭐️ [수정] 정중앙 교차로(23번) 정착 후 출발 루트! 
+    # (↘️ 화살표 방향을 따라 골인점(0)으로 향하는 가장 빠른 최단 지름길인 28, 29번 쪽으로 이동!)
+    23: [23, 28, 29, 0, 99]
+}
+
+# ⭐️ [수정] 빽도 역주행 맵도 맵 데이터에 맞게 톱니바퀴 조율!
+BACKWARD_MAP = {
+    0: 19, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 
+    10: 9, 11: 10, 12: 11, 13: 12, 14: 13, 15: 14, 16: 15, 17: 16, 
+    18: 17, 19: 18, 
+    # 대각선 라인 역주행
+    21: 5, 22: 21, 23: 22, 
+    24: 23, 25: 24,
+    26: 10, 27: 26, 28: 23, 29: 28
+}
+
+# ⭐️ 윷 결과값을 숫자(이동 칸 수)로 바꿔주는 헬퍼 함수
+def yut_to_number(yut_str):
+    mapping = {"도": 1, "개": 2, "걸": 3, "윷": 4, "모": 5, "빽도": -1}
+    return mapping.get(yut_str, 0)
+
+# ⭐️ 현재 위치와 이동 칸 수를 주면 '도착할 위치'를 뱉어내는 헬퍼 함수
+def calculate_arrival(current_pos, move_value):
+    # 대기실(-1)에서 출발하는 경우
+    if current_pos == -1:
+        if move_value < 0: return None # 대기실에서 빽도는 무효! 나갈 수 없음
+        return move_value        # 1칸(도) -> 0번(출발점), 2칸(개) -> 1번...
+        
+    # 빽도(-1칸) 혹은 백스텝(-N칸) 처리
+    if move_value < 0:
+        for _ in range(abs(move_value)):
+            current_pos = BACKWARD_MAP.get(current_pos, current_pos)
+        return current_pos
+        
+    # 전진 처리
+    path = FORWARD_PATHS[current_pos]
+    if move_value < len(path):
+        return path[move_value]
+    else:
+        return 99 # 윷판 경로 길이를 초과하면 무조건 골인(99)
+
+# 3. 게임 시작 명령어
+@bot.tree.command(name="초능력윷놀이", description="친구와 함께 초능력 윷놀이를 시작합니다!")
+@app_commands.describe(상대방="같이 게임할 유저를 선택하세요")
+async def start_yut(interaction: discord.Interaction, 상대방: discord.Member):
+    if 상대방.bot:
+        await interaction.response.send_message("봇과는 윷놀이를 할 수 없어요!", ephemeral=True)
+        return
+    
+    #if interaction.user.id == 상대방.id:
+    #    await interaction.response.send_message("자기 자신과는 게임할 수 없어요! 친구를 태그해주세요.", ephemeral=True)
+    #    return
+
+    view = YutGameView(interaction.user, 상대방)
+    image_file = view.generate_board_image() # 이미지 렌더링!
+    embed = view.create_board_embed()
+    
+    await interaction.response.send_message(
+        f"{interaction.user.mention} 님이 {상대방.mention} 님에게 초능력 윷놀이를 신청했습니다!\n(선공: {interaction.user.display_name})", 
+        file=image_file, # ⭐️ 파일 쏘기!
+        embed=embed, 
+        view=view
+    )
 
 bot.run(TOKEN)
