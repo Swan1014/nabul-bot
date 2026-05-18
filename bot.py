@@ -717,19 +717,30 @@ async def check_weather(interaction: discord.Interaction, 지역명: str):
 # ==========================================
 # 윷놀이 명령어
 # ==========================================
+YUT_SKILLS = ["개와 돼지의 시간", "100 마력", "후진 기어", "디스 이즈 더블더블", "모 아니면 도", "마이더스의 손", "테이크 아웃", "백스텝"]
+BOARD_SKILLS = ["강제 귀가", "업고 가실게요", "자리 좀 바꿔주세요", "제 앞에 놔주세요", "백허그", "밥상 뒤집기", "결승점이 코앞이네", "폭발물 주의"]
 
 # 1. 플레이어의 상태를 저장하는 데이터 클래스
 class YutPlayer:
     def __init__(self, member: discord.Member, is_p1: bool):
         self.member = member
-        self.emoji = "🔴" if is_p1 else "🔵"  # P1은 빨강, P2는 파랑
-        self.horses = [-1, -1, -1, -1]       # 말 4개 (-1: 대기실, 99: 골인, 0~29: 보드판 좌표)
-        self.score = 0                       # 골인한 말의 개수
-        self.yut_skill = "랜덤 윷 스킬"       # (임시) 나중에 랜덤 부여 로직 추가
-        self.board_skill = "랜덤 말 스킬"     # (임시) 나중에 랜덤 부여 로직 추가
-        self.move_list = []                  # 예: ['도', '윷', '모']
-        self.throw_count = 1                 # 윷을 던질 수 있는 남은 횟수 (기본 1회)
-        self.used_skill = False              # 이번 턴에 스킬을 썼는지 여부
+        self.emoji = "🔴" if is_p1 else "🔵"
+        self.horses = [-1, -1, -1, -1]
+        self.score = 0
+        self.move_list = []
+        self.throw_count = 1
+        self.used_skill = False
+        
+        # ⭐️ 꼼수 방지용 스위치 추가!
+        self.has_thrown = False 
+
+        # ⭐️ 초능력 시스템용 특수 변수들
+        self.yut_skill = ""
+        self.board_skill = ""
+        self.yut_skill_used = False   
+        self.board_skill_used = False 
+        self.takeout_storage = []     
+        self.active_buff = None
 
 # 2. 게임판 UI (버튼과 드롭다운을 관리하는 View)
 class HorseSelect(discord.ui.Select):
@@ -758,14 +769,115 @@ class HorseSelect(discord.ui.Select):
         view.selected_horse_pos = int(self.values[0])
         await view.update_ui(interaction)
 
+class SkillSelectView(discord.ui.View):
+    def __init__(self, game_view, player):
+        super().__init__(timeout=60)
+        self.game_view = game_view
+        self.player = player
+        
+        # ⭐️ 이 메뉴가 열렸을 당시의 턴 번호를 도장 쾅!
+        self.opened_turn = game_view.turn_count 
+
+        # 윷 스킬 버튼
+        btn_yut = discord.ui.Button(
+            label=f"윷 스킬: {player.yut_skill}",
+            style=discord.ButtonStyle.primary if not player.yut_skill_used else discord.ButtonStyle.secondary,
+            disabled=player.yut_skill_used
+        )
+        btn_yut.callback = self.use_yut_skill
+        self.add_item(btn_yut)
+
+        # 말 스킬 버튼
+        btn_board = discord.ui.Button(
+            label=f"말 스킬: {player.board_skill}",
+            style=discord.ButtonStyle.success if not player.board_skill_used else discord.ButtonStyle.secondary,
+            disabled=player.board_skill_used
+        )
+        btn_board.callback = self.use_board_skill
+        self.add_item(btn_board)
+
+    async def use_yut_skill(self, interaction: discord.Interaction):
+        if self.opened_turn != self.game_view.turn_count:
+            return await interaction.response.send_message("❌ 이 메뉴는 지난 턴에 열렸습니다! 윷판 아래의 버튼을 눌러 새로 열어주세요.", ephemeral=True)
+            
+        if self.game_view.current_player.member.id != self.player.member.id:
+            return await interaction.response.send_message("❌ 이미 당신의 턴이 지났습니다!", ephemeral=True)
+        if self.player.has_thrown:
+            return await interaction.response.send_message("❌ 이미 윷을 던진 후에는 초능력을 사용할 수 없습니다!", ephemeral=True)
+        if self.player.used_skill:
+            return await interaction.response.send_message("❌ 이번 턴에는 이미 다른 초능력을 사용했습니다!", ephemeral=True)
+
+        # ⭐️ 1. 누른 비밀 버튼 메뉴를 "발동 완료" 상태로 변경하여 없앰
+        await interaction.response.edit_message(content=f"🔮 **[{self.player.yut_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+
+        # ⭐️ 2. 플레이어 상태 변경 (게임당 1회 스킬 소진 & 이번 턴 스킬 사용 완료)
+        self.player.yut_skill_used = True
+        self.player.used_skill = True
+        
+        msg = ""
+
+        # ==========================================
+        # 🐶🐷 스킬 1: 개와 돼지의 시간
+        # ==========================================
+        if self.player.yut_skill == "개와 돼지의 시간":
+            self.player.throw_count = 0 # 윷 던지기 기회 박탈!
+            self.player.move_list.extend(["도", "개"]) # 리스트에 강제 주입!
+            msg = f"🐶🐷 **{self.player.member.display_name}**님이 **[개와 돼지의 시간]**을 발동했습니다!\n(윷을 던지지 않고 '도'와 '개'를 획득합니다)"
+
+        # ==========================================
+        # 🐎 스킬 2: 100 마력
+        # ==========================================
+        elif self.player.yut_skill == "100 마력":
+            self.player.active_buff = "100 마력" # ⭐️ 주사위 조작 버프 장전!
+            msg = f"🐎 **{self.player.member.display_name}**님이 **[100 마력]**을 발동했습니다!\n(이번 윷 던지기에서 무조건 **'걸'**이 나옵니다!)"
+
+        # ==========================================
+        # ⏪ 스킬 3: 후진 기어
+        # ==========================================
+        elif self.player.yut_skill == "후진 기어":
+            self.player.active_buff = "후진 기어" # ⭐️ 주사위 조작 버프 장전!
+            msg = f"⏪ **{self.player.member.display_name}**님이 **[후진 기어]**를 발동했습니다!\n(이번 윷 던지기에서 무조건 **'빽도'**가 나옵니다!)"
+
+        # ⭐️ 메인 게임판(본체) 업데이트 명령을 내림!
+        await self.game_view.update_ui(message_text=msg)
+
+    async def use_board_skill(self, interaction: discord.Interaction):
+        # ⭐️ [유통기한 검사] 여기도 차단!
+        if self.opened_turn != self.game_view.turn_count:
+            return await interaction.response.send_message("❌ 이 메뉴는 지난 턴에 열렸습니다! 윷판 아래의 버튼을 눌러 새로 열어주세요.", ephemeral=True)
+            
+        if self.game_view.current_player.member.id != self.player.member.id:
+            return await interaction.response.send_message("❌ 이미 당신의 턴이 지났습니다!", ephemeral=True)
+        if self.player.has_thrown:
+            return await interaction.response.send_message("❌ 이미 윷을 던진 후에는 초능력을 사용할 수 없습니다!", ephemeral=True)
+        if self.player.used_skill:
+            return await interaction.response.send_message("❌ 이번 턴에는 이미 다른 초능력을 사용했습니다!", ephemeral=True)
+
+        await interaction.response.send_message(f"🔮 **[{self.player.board_skill}]** 스킬을 선택했습니다! (기능 공사 중 🛠️)", ephemeral=True)
+
 class YutGameView(discord.ui.View):
     def __init__(self, p1: discord.Member, p2: discord.Member, is_superpower: bool = False):
-        super().__init__(timeout=None) # 시간 제한 없음
+        super().__init__(timeout=None)
         self.is_superpower = is_superpower
         self.player1 = YutPlayer(p1, True)
         self.player2 = YutPlayer(p2, False)
-        self.current_player = self.player1 # P1부터 시작!
+
+        if is_superpower:
+            import random
+            y_skills = random.sample(YUT_SKILLS, 2)
+            b_skills = random.sample(BOARD_SKILLS, 2)
+            self.player1.yut_skill = y_skills[0]
+            self.player1.board_skill = b_skills[0]
+            self.player2.yut_skill = y_skills[1]
+            self.player2.board_skill = b_skills[1]
+
+        self.current_player = self.player1
         self.selected_horse_pos = None
+        self.traps = {} # ⭐️ 바닥에 설치된 함정들 기록 {칸번호: '포탈' 또는 '폭탄'}
+        self.turn_count = 1
+
+        self.board_message = None
+
         self.setup_buttons()
 
     def generate_board_image(self):
@@ -931,7 +1043,7 @@ class YutGameView(discord.ui.View):
                     self.add_item(btn_error)
 
         # ⭐️ 초능력 모드이고, 아직 스킬을 안 썼다면 '초능력 사용' 버튼 등장!
-        if self.is_superpower and not self.current_player.used_skill:
+        if self.is_superpower and not self.current_player.used_skill and not self.current_player.has_thrown:
             btn_skill = discord.ui.Button(label="초능력 사용", style=discord.ButtonStyle.success, emoji="✨", row=3)
             btn_skill.callback = self.btn_skill_callback
             self.add_item(btn_skill)
@@ -946,69 +1058,98 @@ class YutGameView(discord.ui.View):
         if interaction.user.id != self.current_player.member.id:
             return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
             
-        await interaction.response.send_message("초능력 선택 UI가 오픈될 예정입니다. (개발 중 🛠️)", ephemeral=True)
+        # ⭐️ 에페머럴(비밀) 뷰를 띄워줌!
+        skill_view = SkillSelectView(self, self.current_player)
+        await interaction.response.send_message("👇 사용하실 초능력을 선택하세요! (나에게만 보입니다)", view=skill_view, ephemeral=True)
 
     # ⭐️ 화면을 새로고침하는 헬퍼 함수
-    async def update_ui(self, interaction: discord.Interaction, message_text=None):
-        # ⭐️ 1. 게임 종료(승리) 판정! 4점을 먼저 내면 즉시 게임 끝!
+    # ⭐️ 초능력 버튼 콜백 함수 (윷판 메시지 주소 저장 로직 추가)
+    async def btn_skill_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player.member.id:
+            return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+            
+        # ⭐️ 비밀 메뉴를 띄우기 직전에, 이 버튼이 달려있는 진짜 윷판 메시지 객체를 꽉 쥐어둠!
+        self.board_message = interaction.message 
+            
+        skill_view = SkillSelectView(self, self.current_player)
+        await interaction.response.send_message("👇 사용하실 초능력을 선택하세요! (나에게만 보입니다)", view=skill_view, ephemeral=True)
+
+    # ⭐️ 화면 새로고침 헬퍼 함수 (비밀 메뉴에서도 호출할 수 있게 개조!)
+    async def update_ui(self, interaction: discord.Interaction = None, message_text=None):
         if self.player1.score >= 4 or self.player2.score >= 4:
             winner = self.player1 if self.player1.score >= 4 else self.player2
-            
-            self.clear_items() # 텅 빈 드롭다운을 만들지 않도록 모든 버튼/메뉴 싹 지우기
+            self.clear_items()
             image_file = self.generate_board_image()
             embed = self.create_board_embed()
-            
-            # 승리 축하 메시지 추가
-            embed.color = 0x00FF00 # 임베드 띠 색상을 영롱한 초록색으로 변경
+            embed.color = 0x00FF00
             embed.add_field(name="🏆 게임 종료 🏆", value=f"🎉 **{winner.member.display_name}** 님이 4점을 달성하여 최종 승리했습니다!", inline=False)
             
-            await interaction.response.edit_message(content=f"🎊 {winner.member.mention} 님의 승리!!", attachments=[image_file], embed=embed, view=None)
-            self.stop() # ⭐️ 더 이상 상호작용을 받지 않고 봇의 대기 상태를 종료함
+            # ⭐️ interaction이 있으면 그걸로, 없으면 기억해둔 본체 메시지로 업데이트!
+            if interaction:
+                await interaction.response.edit_message(content=f"🎊 {winner.member.mention} 님의 승리!!", attachments=[image_file], embed=embed, view=None)
+            elif self.board_message:
+                await self.board_message.edit(content=f"🎊 {winner.member.mention} 님의 승리!!", attachments=[image_file], embed=embed, view=None)
+            self.stop()
             return
 
-        # 2. 게임이 안 끝났다면 평소처럼 UI 세팅
         self.setup_buttons()
         image_file = self.generate_board_image()
         embed = self.create_board_embed()
         
         content = message_text if message_text else f"현재 턴: {self.current_player.member.mention}"
-        await interaction.response.edit_message(content=content, attachments=[image_file], embed=embed, view=self)
+        
+        # ⭐️ 여기도 마찬가지!
+        if interaction:
+            await interaction.response.edit_message(content=content, attachments=[image_file], embed=embed, view=self)
+        elif self.board_message:
+            await self.board_message.edit(content=content, attachments=[image_file], embed=embed, view=self)
 
     # [콜백] 윷 던지기 버튼 눌렀을 때
     async def btn_throw_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player.member.id:
             return await interaction.response.send_message("당신의 턴이 아닙니다!", ephemeral=True)
             
+        self.current_player.has_thrown = True 
+        
         import random
         
-        # ⭐️ 네가 기획한 현실적인 확률 도입!
-        yut_results = ["낙", "도", "개", "걸", "윷", "모", "빽도"]
-        # 퍼센트를 가중치(weights)로 그대로 사용!
-        yut_weights = [1.5, 11.35, 34.04, 34.04, 12.77, 2.52, 3.78]
-        
-        # random.choices를 사용하면 가중치에 맞게 1개를 뽑아줌
-        result = random.choices(yut_results, weights=yut_weights, k=1)[0]
+        # ⭐️ 밑장빼기(버프) 확인 구간!
+        if self.current_player.active_buff == "100 마력":
+            result = "걸"
+            self.current_player.active_buff = None # 버프는 1회용이므로 사용 후 즉시 소멸!
+        elif self.current_player.active_buff == "후진 기어":
+            result = "빽도"
+            self.current_player.active_buff = None # 버프 소모!
+        else:
+            # 버프가 없다면 평소처럼 정직한 윷놀이 확률 적용
+            yut_results = ["낙", "도", "개", "걸", "윷", "모", "빽도"]
+            yut_weights = [1.5, 11.35, 34.04, 34.04, 12.77, 2.52, 3.78]
+            result = random.choices(yut_results, weights=yut_weights, k=1)[0]
         
         self.current_player.throw_count -= 1
         
-        # ⭐️ '낙' 처리 로직
+        # 낙 처리 로직
         if result == "낙":
             msg = "😱 앗! 윷이 판 밖으로 나갔습니다! (**낙**)"
         else:
             self.current_player.move_list.append(result)
-            # 윷이나 모가 나오면 던질 기회 +1
             if result in ["윷", "모"]: 
                 self.current_player.throw_count += 1
             msg = f"🎲 **{result}**가 나왔습니다!"
             
-        self.selected_horse_pos = None # 윷을 새로 던지면 말 선택 초기화
+        self.selected_horse_pos = None
         
-        # ⭐️ [핵심] 낙이 나와서 던질 기회가 날아갔는데, 쓸 수 있는 윷(이동 리스트)도 없다면? -> 턴 강제 종료!
+        # ⭐️ 턴 강제 종료 판정 부분 (던질 기회도 없고 이동할 윷도 없을 때)
         if self.current_player.throw_count == 0 and len(self.current_player.move_list) == 0:
             enemy = self.player2 if self.current_player == self.player1 else self.player1
             self.current_player = enemy
+
+            self.turn_count += 1
+
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
+            self.current_player.has_thrown = False 
+            
             self.current_player.move_list.clear()
             msg += f"\n🔄 이동할 수 없어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
             
@@ -1063,8 +1204,13 @@ class YutGameView(discord.ui.View):
         # 5. 턴 종료 판정 (던질 기회도 없고, 남은 리스트도 없으면 상대 턴으로!)
         if me.throw_count == 0 and len(me.move_list) == 0:
             self.current_player = enemy
+
+            self.turn_count += 1
+
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
+            self.current_player.has_thrown = False 
+            
             self.current_player.move_list.clear()
             msg += f"\n🔄 턴이 종료되어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
             
@@ -1074,14 +1220,16 @@ class YutGameView(discord.ui.View):
     async def btn_skip_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player.member.id: return
         self.current_player = self.player2 if self.current_player == self.player1 else self.player1
+        self.turn_count += 1
         self.current_player.throw_count = 1
+        self.current_player.used_skill = False
+        self.current_player.has_thrown = False
         self.current_player.move_list.clear()
         self.selected_horse_pos = None
         await self.update_ui(interaction, f"⏭️ 턴을 강제로 넘겼습니다.")
 
     # ⭐️ [수정됨] 임베드에 텍스트 대신 방금 만든 이미지를 첨부!
     def create_board_embed(self):
-        # ⭐️ 모드에 따라 타이틀 다르게 설정
         title_text = "🔮 메이플 초능력 윷놀이 🔮" if self.is_superpower else "🎲 클래식 윷놀이 🎲"
         
         embed = discord.Embed(
@@ -1096,10 +1244,15 @@ class YutGameView(discord.ui.View):
         p2_horses = "🔵" * self.player2.horses.count(-1) + " (대기)"
         p2_score = "⭐" * self.player2.score + f" ({self.player2.score}점)"
         
-        # ⭐️ 초능력 모드일 때만 스킬 정보 표시!
         if self.is_superpower:
-            p1_info = f"**윷 스킬:** {self.player1.yut_skill}\n**말 스킬:** {self.player1.board_skill}\n**대기석:** {p1_horses}\n**골인:** {p1_score}"
-            p2_info = f"**윷 스킬:** {self.player2.yut_skill}\n**말 스킬:** {self.player2.board_skill}\n**대기석:** {p2_horses}\n**골인:** {p2_score}"
+            # ⭐️ 썼으면 이름을 공개하고, 안 썼으면 ❓ 로 가림!
+            p1_ys = self.player1.yut_skill if self.player1.yut_skill_used else "❓"
+            p1_bs = self.player1.board_skill if self.player1.board_skill_used else "❓"
+            p2_ys = self.player2.yut_skill if self.player2.yut_skill_used else "❓"
+            p2_bs = self.player2.board_skill if self.player2.board_skill_used else "❓"
+            
+            p1_info = f"**윷 스킬:** {p1_ys}\n**말 스킬:** {p1_bs}\n**대기석:** {p1_horses}\n**골인:** {p1_score}"
+            p2_info = f"**윷 스킬:** {p2_ys}\n**말 스킬:** {p2_bs}\n**대기석:** {p2_horses}\n**골인:** {p2_score}"
         else:
             p1_info = f"**대기석:** {p1_horses}\n**골인:** {p1_score}"
             p2_info = f"**대기석:** {p2_horses}\n**골인:** {p2_score}"
