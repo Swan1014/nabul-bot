@@ -907,22 +907,23 @@ class YutGameView(discord.ui.View):
             # 3. 드롭다운에서 말을 선택했다면?
             if self.selected_horse_pos is not None:
                 unique_moves = set(self.current_player.move_list)
-                valid_move_exists = False # ⭐️ 이동 가능한 경로가 있는지 체크하는 변수
+                valid_move_exists = False 
                 
                 for yut_str in unique_moves:
                     move_val = yut_to_number(yut_str)
-                    dest = calculate_arrival(self.selected_horse_pos, move_val)
                     
-                    if dest is not None: # ⭐️ None이 아닐 때만 버튼 생성!
+                    # ⭐️ 헬퍼 함수가 리스트를 반환하므로 반복문으로 처리!
+                    destinations = calculate_arrival(self.selected_horse_pos, move_val)
+                    
+                    for dest in destinations: # ⭐️ 갈림길이 2개면 버튼이 2개 생김!
                         valid_move_exists = True
                         dest_label = "🏁 골인하기" if dest == 99 else f"📍 {dest}번 칸으로 이동"
                         btn_move = discord.ui.Button(label=f"{dest_label} ({yut_str})", style=discord.ButtonStyle.success)
                         btn_move.callback = lambda i, d=dest, y=yut_str: self.btn_move_callback(i, d, y)
                         self.add_item(btn_move)
                         
-                # ⭐️ 이동 가능한 버튼이 단 한 개도 만들어지지 않았다면? (예: 대기실 말에 빽도만 남은 경우)
                 if not valid_move_exists:
-                    btn_error = discord.ui.Button(label="❌ 이 말은 이동 불가", style=discord.ButtonStyle.secondary, disabled=True)
+                    btn_error = discord.ui.Button(label="❌ 이 말은 현재 윷으로 이동 불가", style=discord.ButtonStyle.secondary, disabled=True)
                     self.add_item(btn_error)
                         
         # ⭐️ 빽도만 나와서 어쩔 수 없이 턴을 버려야 할 때를 위한 스킵 버튼
@@ -962,16 +963,39 @@ class YutGameView(discord.ui.View):
             return await interaction.response.send_message("당신의 턴이 아닙니다!", ephemeral=True)
             
         import random
-        result = random.choice(["도", "개", "걸", "윷", "모", "빽도"])
         
-        self.current_player.move_list.append(result)
+        # ⭐️ 네가 기획한 현실적인 확률 도입!
+        yut_results = ["낙", "도", "개", "걸", "윷", "모", "빽도"]
+        # 퍼센트를 가중치(weights)로 그대로 사용!
+        yut_weights = [1.5, 11.35, 34.04, 34.04, 12.77, 2.52, 3.78]
+        
+        # random.choices를 사용하면 가중치에 맞게 1개를 뽑아줌
+        result = random.choices(yut_results, weights=yut_weights, k=1)[0]
+        
         self.current_player.throw_count -= 1
         
-        # 윷이나 모가 나오면 기회 +1
-        if result in ["윷", "모"]: self.current_player.throw_count += 1
+        # ⭐️ '낙' 처리 로직
+        if result == "낙":
+            msg = "😱 앗! 윷이 판 밖으로 나갔습니다! (**낙**)"
+        else:
+            self.current_player.move_list.append(result)
+            # 윷이나 모가 나오면 던질 기회 +1
+            if result in ["윷", "모"]: 
+                self.current_player.throw_count += 1
+            msg = f"🎲 **{result}**가 나왔습니다!"
             
         self.selected_horse_pos = None # 윷을 새로 던지면 말 선택 초기화
-        await self.update_ui(interaction, f"🎲 **{result}**가 나왔습니다!")
+        
+        # ⭐️ [핵심] 낙이 나와서 던질 기회가 날아갔는데, 쓸 수 있는 윷(이동 리스트)도 없다면? -> 턴 강제 종료!
+        if self.current_player.throw_count == 0 and len(self.current_player.move_list) == 0:
+            enemy = self.player2 if self.current_player == self.player1 else self.player1
+            self.current_player = enemy
+            self.current_player.throw_count = 1
+            self.current_player.used_skill = False
+            self.current_player.move_list.clear()
+            msg += f"\n🔄 이동할 수 없어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
+            
+        await self.update_ui(interaction, msg)
 
     # ⭐️ [핵심 콜백] 목적지 이동 버튼 눌렀을 때 (이동, 업기, 잡기 판정!)
     async def btn_move_callback(self, interaction: discord.Interaction, dest: int, used_yut: str):
@@ -1064,32 +1088,6 @@ class YutGameView(discord.ui.View):
         embed.add_field(name="🎯 현재 이동 리스트", value=f"➡️ **{move_str}**\n*(남은 윷 던지기 기회: {self.current_player.throw_count}번)*", inline=False)
         return embed
 
-    # [버튼 1] 윷 던지기
-    @discord.ui.button(label="윷 던지기", style=discord.ButtonStyle.primary, emoji="🎲")
-    async def btn_throw(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.current_player.member.id:
-            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
-            return
-            
-        if self.current_player.throw_count <= 0:
-            await interaction.response.send_message("더 이상 윷을 던질 수 없습니다. 이동할 말을 선택하세요!", ephemeral=True)
-            return
-
-        # TODO: 윷 확률 계산 로직 (모 아니면 도 등 스킬 효과 반영)
-        # 임시로 랜덤 결과만 띄워놓음
-        import random
-        result = random.choice(["도", "개", "걸", "윷", "모", "빽도"])
-        
-        self.current_player.move_list.append(result)
-        self.current_player.throw_count -= 1
-        
-        # 윷이나 모가 나오면 던지기 기회 +1
-        if result in ["윷", "모"]:
-            self.current_player.throw_count += 1
-
-            image_file = self.generate_board_image()
-            await interaction.response.edit_message(attachments=[image_file], embed=self.create_board_embed(), view=self)
-
     # [버튼 2] 초능력 사용
     @discord.ui.button(label="초능력 사용", style=discord.ButtonStyle.success, emoji="✨")
     async def btn_skill(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1123,54 +1121,58 @@ class YutGameView(discord.ui.View):
 # ⭐️ 윷판의 모든 전진 경로를 맵핑한 사전 (현재 위치가 Key)
 # 리스트의 인덱스가 곧 전진하는 칸 수! (예: 1칸 전진 -> path[1])
 FORWARD_PATHS = {
+    # ⭐️ 0번에 정착한 말은 다음 턴에 1칸(도)이라도 나오면 무조건 골인(99)!
+    0: [0, 99, 99, 99, 99, 99, 99], 
+
     # 바깥쪽 테두리 (모서리 출발 제외)
-    0: [0, 99, 99, 99, 99, 99, 99], # 결승점 칸에 안착한 후엔 무조건 초과해야 골인!
-    1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    2: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    4: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    6: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    7: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    8: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    9: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    11: [11, 12, 13, 14, 15, 16, 17, 18, 19, 99],
-    12: [12, 13, 14, 15, 16, 17, 18, 19, 99],
-    13: [13, 14, 15, 16, 17, 18, 19, 99],
-    14: [14, 15, 16, 17, 18, 19, 99],
-    15: [15, 16, 17, 18, 19, 99],
-    16: [16, 17, 18, 19, 99],
-    17: [17, 18, 19, 99],
-    18: [18, 19, 99],
-    19: [19, 99],
+    # ⭐️ 맨 끝에 19 -> 0 -> 99 순서로 이어지도록 0번을 싹 추가했어!
+    1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    2: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    3: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    4: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    6: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    7: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    8: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    9: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    11: [11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    12: [12, 13, 14, 15, 16, 17, 18, 19, 0, 99],
+    13: [13, 14, 15, 16, 17, 18, 19, 0, 99],
+    14: [14, 15, 16, 17, 18, 19, 0, 99],
+    15: [15, 16, 17, 18, 19, 0, 99],
+    16: [16, 17, 18, 19, 0, 99],
+    17: [17, 18, 19, 0, 99],
+    18: [18, 19, 0, 99],
+    19: [19, 0, 99], # 19번에서 '도'면 0번에 멈추고, '개'면 99로 나감!
     
-    # ⭐️ [수정] 우상단 꺾임 루트 (5 -> 21 -> 22 -> 23 -> 24 -> 25 -> 15)
-    5: [5, 21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
-    21: [21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
-    22: [22, 23, 24, 25, 15, 16, 17, 18, 19, 99],
-    24: [24, 25, 15, 16, 17, 18, 19, 99],
-    25: [25, 15, 16, 17, 18, 19, 99],
+    # 우상단 꺾임 루트 (5 -> 21 -> 22 -> 23 -> 24 -> 25 -> 15 -> ... -> 0 -> 99)
+    5: [5, 21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 0, 99],
+    21: [21, 22, 23, 24, 25, 15, 16, 17, 18, 19, 0, 99],
+    22: [22, 23, 24, 25, 15, 16, 17, 18, 19, 0, 99],
+    24: [24, 25, 15, 16, 17, 18, 19, 0, 99],
+    25: [25, 15, 16, 17, 18, 19, 0, 99],
     
-    # ⭐️ [수정] 좌상단 꺾임 루트 (10 -> 26 -> 27 -> 23 -> 28 -> 29 -> 0)
+    # 좌상단 꺾임 루트 (10 -> 26 -> 27 -> 23 -> 28 -> 29 -> 0 -> 99)
     10: [10, 26, 27, 23, 28, 29, 0, 99],
     26: [26, 27, 23, 28, 29, 0, 99],
     27: [27, 23, 28, 29, 0, 99],
     28: [28, 29, 0, 99],
-    29: [29, 0, 99],
+    29: [29, 0, 99], # 29번에서 '도'면 0번에 멈추고, '개'면 99로 골인!
     
-    # ⭐️ [수정] 정중앙 교차로(23번) 정착 후 출발 루트! 
-    # (↘️ 화살표 방향을 따라 골인점(0)으로 향하는 가장 빠른 최단 지름길인 28, 29번 쪽으로 이동!)
+    # 정중앙 교차로(23번) 정착 후 출발 루트! 
     23: [23, 28, 29, 0, 99]
 }
 
 # ⭐️ [수정] 빽도 역주행 맵도 맵 데이터에 맞게 톱니바퀴 조율!
 BACKWARD_MAP = {
-    0: 19, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 
-    10: 9, 11: 10, 12: 11, 13: 12, 14: 13, 15: 14, 16: 15, 17: 16, 
-    18: 17, 19: 18, 
-    # 대각선 라인 역주행
-    21: 5, 22: 21, 23: 22, 
-    24: 23, 25: 24,
-    26: 10, 27: 26, 28: 23, 29: 28
+    0: [19, 29], # ⭐️ 결승선 갈림길
+    1: [0], 2: [1], 3: [2], 4: [3], 5: [4], 6: [5], 7: [6], 8: [7], 9: [8], 
+    10: [9], 11: [10], 12: [11], 13: [12], 14: [13], 
+    15: [14, 25], # ⭐️ 좌하단 갈림길
+    16: [15], 17: [16], 18: [17], 19: [18], 
+    21: [5], 22: [21], 
+    23: [22, 27], # ⭐️ 정중앙 갈림길
+    24: [23], 25: [24],
+    26: [10], 27: [26], 28: [23], 29: [28]
 }
 
 # ⭐️ 윷 결과값을 숫자(이동 칸 수)로 바꿔주는 헬퍼 함수
@@ -1180,23 +1182,31 @@ def yut_to_number(yut_str):
 
 # ⭐️ 현재 위치와 이동 칸 수를 주면 '도착할 위치'를 뱉어내는 헬퍼 함수
 def calculate_arrival(current_pos, move_value):
-    # 대기실(-1)에서 출발하는 경우
     if current_pos == -1:
-        if move_value < 0: return None # 대기실에서 빽도는 무효! 나갈 수 없음
-        return move_value        # 1칸(도) -> 0번(출발점), 2칸(개) -> 1번...
+        if move_value < 0: return [] # 빽도 방어
+        return [move_value] # 도->0, 모->4로 정확히 리스트 반환
         
-    # 빽도(-1칸) 혹은 백스텝(-N칸) 처리
+    # ⭐️ 빽도(-1) 및 백스텝(-N) 처리 (BFS 알고리즘 적용)
     if move_value < 0:
-        for _ in range(abs(move_value)):
-            current_pos = BACKWARD_MAP.get(current_pos, current_pos)
-        return current_pos
+        steps = abs(move_value)
+        current_nodes = set([current_pos]) # 중복 제거를 위해 set 사용
+        
+        for _ in range(steps):
+            next_nodes = set()
+            for node in current_nodes:
+                # 해당 노드에서 갈 수 있는 모든 뒤쪽 경로를 탐색
+                for back_node in BACKWARD_MAP.get(node, [node]):
+                    next_nodes.add(back_node)
+            current_nodes = next_nodes
+            
+        return list(current_nodes) # 최종 가능한 목적지들 반환!
         
     # 전진 처리
     path = FORWARD_PATHS[current_pos]
     if move_value < len(path):
-        return path[move_value]
+        return [path[move_value]]
     else:
-        return 99 # 윷판 경로 길이를 초과하면 무조건 골인(99)
+        return [99]
 
 # 3. 게임 시작 명령어
 @bot.tree.command(name="초능력윷놀이", description="친구와 함께 초능력 윷놀이를 시작합니다!")
