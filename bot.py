@@ -100,10 +100,10 @@ def extract_wordle_players(content):
     nicknames = [name.strip() for name in clean_str.split(",") if name.strip()]
     return nicknames
 
+@bot.event
 async def on_message(message):
     if message.author.bot:
-        # was/were 따지지 않고 'playing'이라는 단어만 있으면 통과
-        if message.author.name == "Wordle" and "playing" in message.content:
+        if message.author.name == "Wordle" and ("was playing" in message.content or "were playing" in message.content):
             nicknames = extract_wordle_players(message.content)
             
             found_users = []
@@ -123,9 +123,12 @@ async def on_message(message):
         return
 
     if "Wordle" in message.content and "🟩" in message.content:
+        print(f"👀 {message.author.display_name}님의 워들 수동 결과 감지!")
         if message.author.id not in done_today:
             done_today.add(message.author.id)
-            await message.channel.send(f"{message.author.display_name}, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
+            await message.channel.send(f"오! {message.author.display_name}, 수동으로 워들 완료 확인! (현재 {len(done_today)}명 완료)")
+        else:
+            print("❌ 근데 이미 done_today에 등록된 사람이라 무시함!")
 
     await bot.process_commands(message)
 
@@ -133,7 +136,7 @@ async def on_message(message):
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot:
-        if after.author.name == "Wordle" and "playing" in after.content:
+        if after.author.name == "Wordle" and ("was playing" in after.content or "were playing" in after.content):
             nicknames = extract_wordle_players(after.content)
             
             found_users = []
@@ -756,8 +759,9 @@ class HorseSelect(discord.ui.Select):
         await view.update_ui(interaction)
 
 class YutGameView(discord.ui.View):
-    def __init__(self, p1: discord.Member, p2: discord.Member):
+    def __init__(self, p1: discord.Member, p2: discord.Member, is_superpower: bool = False):
         super().__init__(timeout=None) # 시간 제한 없음
+        self.is_superpower = is_superpower
         self.player1 = YutPlayer(p1, True)
         self.player2 = YutPlayer(p2, False)
         self.current_player = self.player1 # P1부터 시작!
@@ -925,11 +929,24 @@ class YutGameView(discord.ui.View):
                 if not valid_move_exists:
                     btn_error = discord.ui.Button(label="❌ 이 말은 현재 윷으로 이동 불가", style=discord.ButtonStyle.secondary, disabled=True)
                     self.add_item(btn_error)
+
+        # ⭐️ 초능력 모드이고, 아직 스킬을 안 썼다면 '초능력 사용' 버튼 등장!
+        if self.is_superpower and not self.current_player.used_skill:
+            btn_skill = discord.ui.Button(label="초능력 사용", style=discord.ButtonStyle.success, emoji="✨", row=3)
+            btn_skill.callback = self.btn_skill_callback
+            self.add_item(btn_skill)
                         
         # ⭐️ 빽도만 나와서 어쩔 수 없이 턴을 버려야 할 때를 위한 스킵 버튼
         btn_skip = discord.ui.Button(label="턴 넘기기", style=discord.ButtonStyle.danger, row=4)
         btn_skip.callback = self.btn_skip_callback
         self.add_item(btn_skip)
+
+    # ⭐️ 초능력 버튼 콜백 함수 (구버전 @discord.ui.button을 대체함!)
+    async def btn_skill_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player.member.id:
+            return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+            
+        await interaction.response.send_message("초능력 선택 UI가 오픈될 예정입니다. (개발 중 🛠️)", ephemeral=True)
 
     # ⭐️ 화면을 새로고침하는 헬퍼 함수
     async def update_ui(self, interaction: discord.Interaction, message_text=None):
@@ -1064,59 +1081,35 @@ class YutGameView(discord.ui.View):
 
     # ⭐️ [수정됨] 임베드에 텍스트 대신 방금 만든 이미지를 첨부!
     def create_board_embed(self):
+        # ⭐️ 모드에 따라 타이틀 다르게 설정
+        title_text = "🔮 메이플 초능력 윷놀이 🔮" if self.is_superpower else "🎲 클래식 윷놀이 🎲"
+        
         embed = discord.Embed(
-            title="🎲 메이플 초능력 윷놀이 🎲", 
+            title=title_text, 
             description=f"현재 턴: {self.current_player.emoji} **{self.current_player.member.display_name}**의 차례입니다!",
             color=0xFF9900
         )
-        
-        # 임베드 안에 진짜 이미지를 장착!
         embed.set_image(url="attachment://yut_board.png") 
         
         p1_horses = "🔴" * self.player1.horses.count(-1) + " (대기)"
         p1_score = "⭐" * self.player1.score + f" ({self.player1.score}점)"
-        p1_info = f"**윷 스킬:** {self.player1.yut_skill}\n**말 스킬:** {self.player1.board_skill}\n**대기석:** {p1_horses}\n**골인:** {p1_score}"
-        
         p2_horses = "🔵" * self.player2.horses.count(-1) + " (대기)"
         p2_score = "⭐" * self.player2.score + f" ({self.player2.score}점)"
-        p2_info = f"**윷 스킬:** {self.player2.yut_skill}\n**말 스킬:** {self.player2.board_skill}\n**대기석:** {p2_horses}\n**골인:** {p2_score}"
         
+        # ⭐️ 초능력 모드일 때만 스킬 정보 표시!
+        if self.is_superpower:
+            p1_info = f"**윷 스킬:** {self.player1.yut_skill}\n**말 스킬:** {self.player1.board_skill}\n**대기석:** {p1_horses}\n**골인:** {p1_score}"
+            p2_info = f"**윷 스킬:** {self.player2.yut_skill}\n**말 스킬:** {self.player2.board_skill}\n**대기석:** {p2_horses}\n**골인:** {p2_score}"
+        else:
+            p1_info = f"**대기석:** {p1_horses}\n**골인:** {p1_score}"
+            p2_info = f"**대기석:** {p2_horses}\n**골인:** {p2_score}"
+            
         embed.add_field(name=f"🔴 {self.player1.member.display_name}", value=p1_info, inline=True)
         embed.add_field(name=f"🔵 {self.player2.member.display_name}", value=p2_info, inline=True)
         
         move_str = " ".join([f"[{m}]" for m in self.current_player.move_list]) if self.current_player.move_list else "(비어 있음)"
         embed.add_field(name="🎯 현재 이동 리스트", value=f"➡️ **{move_str}**\n*(남은 윷 던지기 기회: {self.current_player.throw_count}번)*", inline=False)
         return embed
-
-    # [버튼 2] 초능력 사용
-    @discord.ui.button(label="초능력 사용", style=discord.ButtonStyle.success, emoji="✨")
-    async def btn_skill(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.current_player.member.id:
-            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
-            return
-            
-        if self.current_player.used_skill:
-            await interaction.response.send_message("이번 턴에는 이미 초능력을 사용했습니다!", ephemeral=True)
-            return
-            
-        # TODO: 스킬 선택 드롭다운 UI 띄우기
-        await interaction.response.send_message("초능력 선택 UI가 오픈될 예정입니다. (개발 중 🛠️)", ephemeral=True)
-
-    # [버튼 3] 턴 넘기기 (임시)
-    @discord.ui.button(label="턴 강제 종료", style=discord.ButtonStyle.danger)
-    async def btn_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.current_player.member.id:
-            await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
-            return
-            
-        # 턴 교체 로직
-        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
-        self.current_player.throw_count = 1
-        self.current_player.used_skill = False
-        self.current_player.move_list.clear()
-        
-        image_file = self.generate_board_image()
-        await interaction.response.edit_message(attachments=[image_file], embed=self.create_board_embed(), view=self)
 
 # ⭐️ 윷판의 모든 전진 경로를 맵핑한 사전 (현재 위치가 Key)
 # 리스트의 인덱스가 곧 전진하는 칸 수! (예: 1칸 전진 -> path[1])
@@ -1209,26 +1202,34 @@ def calculate_arrival(current_pos, move_value):
         return [99]
 
 # 3. 게임 시작 명령어
+@bot.tree.command(name="윷놀이", description="친구와 함께 오리지널 클래식 윷놀이를 시작합니다!")
+@app_commands.describe(상대방="같이 게임할 유저를 선택하세요")
+async def start_normal_yut(interaction: discord.Interaction, 상대방: discord.Member):
+    if 상대방.bot: return await interaction.response.send_message("봇과는 윷놀이를 할 수 없어요!", ephemeral=True)
+    
+    # ⭐️ is_superpower=False 로 스위치 끄고 실행
+    view = YutGameView(interaction.user, 상대방, is_superpower=False)
+    image_file = view.generate_board_image() 
+    embed = view.create_board_embed()
+    
+    await interaction.response.send_message(
+        f"{interaction.user.mention} 님이 {상대방.mention} 님에게 클래식 윷놀이를 신청했습니다!\n(선공: {interaction.user.display_name})", 
+        file=image_file, embed=embed, view=view
+    )
+
 @bot.tree.command(name="초능력윷놀이", description="친구와 함께 초능력 윷놀이를 시작합니다!")
 @app_commands.describe(상대방="같이 게임할 유저를 선택하세요")
-async def start_yut(interaction: discord.Interaction, 상대방: discord.Member):
-    if 상대방.bot:
-        await interaction.response.send_message("봇과는 윷놀이를 할 수 없어요!", ephemeral=True)
-        return
+async def start_super_yut(interaction: discord.Interaction, 상대방: discord.Member):
+    if 상대방.bot: return await interaction.response.send_message("봇과는 윷놀이를 할 수 없어요!", ephemeral=True)
     
-    #if interaction.user.id == 상대방.id:
-    #    await interaction.response.send_message("자기 자신과는 게임할 수 없어요! 친구를 태그해주세요.", ephemeral=True)
-    #    return
-
-    view = YutGameView(interaction.user, 상대방)
-    image_file = view.generate_board_image() # 이미지 렌더링!
+    # ⭐️ is_superpower=True 로 스위치 켜고 실행!
+    view = YutGameView(interaction.user, 상대방, is_superpower=True)
+    image_file = view.generate_board_image() 
     embed = view.create_board_embed()
     
     await interaction.response.send_message(
         f"{interaction.user.mention} 님이 {상대방.mention} 님에게 초능력 윷놀이를 신청했습니다!\n(선공: {interaction.user.display_name})", 
-        file=image_file, # ⭐️ 파일 쏘기!
-        embed=embed, 
-        view=view
+        file=image_file, embed=embed, view=view
     )
 
 bot.run(TOKEN)
