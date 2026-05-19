@@ -838,6 +838,41 @@ class SkillSelectView(discord.ui.View):
             self.player.active_buff = "후진 기어" # ⭐️ 주사위 조작 버프 장전!
             msg = f"⏪ **{self.player.member.display_name}**님이 **[후진 기어]**를 발동했습니다!\n(이번 윷 던지기에서 무조건 **'빽도'**가 나옵니다!)"
 
+        # ==========================================
+        # ✌️ 스킬 4: 디스 이즈 더블더블
+        # ==========================================
+        elif self.player.yut_skill == "디스 이즈 더블더블":
+            self.player.active_buff = "디스 이즈 더블더블" # ⭐️ 더블더블 버프 장전!
+            msg = f"✌️ **{self.player.member.display_name}**님이 **[디스 이즈 더블더블]**을 발동했습니다!\n(이번에 던지는 윷의 결과가 2배로 적용됩니다!)"
+        
+        # ==========================================
+        # 🌗 스킬 5: 모 아니면 도
+        # ==========================================
+        elif self.player.yut_skill == "모 아니면 도":
+            self.player.active_buff = "모 아니면 도" 
+            msg = f"🌗 **{self.player.member.display_name}**님이 **[모 아니면 도]**를 발동했습니다!\n(이번 윷 던지기에서 50% 확률로 **'모'**, 50% 확률로 **'도'**가 나옵니다!)"
+
+        # ==========================================
+        # ✨ 스킬 6: 마이더스의 손
+        # ==========================================
+        elif self.player.yut_skill == "마이더스의 손":
+            self.player.active_buff = "마이더스의 손"
+            msg = f"✨ **{self.player.member.display_name}**님이 **[마이더스의 손]**을 발동했습니다!\n(이번 윷 던지기에서 50% 확률로 **'윷'**, 50% 확률로 **'모'**가 나옵니다!)"
+
+        # ==========================================
+        # ☕ 스킬 7: 테이크 아웃
+        # ==========================================
+        elif self.player.yut_skill == "테이크 아웃":
+            self.player.active_buff = "테이크 아웃"
+            msg = f"☕ **{self.player.member.display_name}**님이 **[테이크 아웃]**을 발동했습니다!\n(이번 턴의 윷 결과를 보관해 두었다가 다음 턴에 같이 사용합니다.)"
+
+        # ==========================================
+        # ⏪ 스킬 8: 백스텝
+        # ==========================================
+        elif self.player.yut_skill == "백스텝":
+            self.player.active_buff = "백스텝"
+            msg = f"⏪ **{self.player.member.display_name}**님이 **[백스텝]**을 발동했습니다!\n(이번에 던지는 첫 번째 윷은 뒤로 이동합니다!)"
+
         # ⭐️ 메인 게임판(본체) 업데이트 명령을 내림!
         await self.game_view.update_ui(message_text=msg)
 
@@ -1120,6 +1155,14 @@ class YutGameView(discord.ui.View):
         elif self.current_player.active_buff == "후진 기어":
             result = "빽도"
             self.current_player.active_buff = None # 버프 소모!
+        elif self.current_player.active_buff == "모 아니면 도":
+            # ⭐️ 도 50%, 모 50%
+            result = random.choice(["도", "모"])
+            self.current_player.active_buff = None 
+        elif self.current_player.active_buff == "마이더스의 손":
+            # ⭐️ 윷 50%, 모 50%
+            result = random.choice(["윷", "모"])
+            self.current_player.active_buff = None
         else:
             # 버프가 없다면 평소처럼 정직한 윷놀이 확률 적용
             yut_results = ["낙", "도", "개", "걸", "윷", "모", "빽도"]
@@ -1131,27 +1174,56 @@ class YutGameView(discord.ui.View):
         # 낙 처리 로직
         if result == "낙":
             msg = "😱 앗! 윷이 판 밖으로 나갔습니다! (**낙**)"
+            if self.current_player.active_buff in ["디스 이즈 더블더블", "백스텝"]:
+                self.current_player.active_buff = None # 낙 나오면 버프 증발!
         else:
-            self.current_player.move_list.append(result)
+            if self.current_player.active_buff == "디스 이즈 더블더블":
+                self.current_player.move_list.extend([result, result]) 
+                self.current_player.active_buff = None 
+                msg = f"✌️ 디스 이즈 더블더블 효과로 **{result}**가 두 번 적용됩니다!!"
+            elif self.current_player.active_buff == "백스텝":
+                # ⭐️ 결과 앞에 '-'를 붙여서 리스트에 넣고 버프 소모!
+                backstep_result = f"-{result}"
+                self.current_player.move_list.append(backstep_result)
+                self.current_player.active_buff = None 
+                msg = f"⏪ 백스텝 발동! **{result}**가 뒤로 가는 **{backstep_result}**로 변환되었습니다!"
+            else:
+                self.current_player.move_list.append(result)
+                msg = f"🎲 **{result}**가 나왔습니다!"
+            
+            # 윷이나 모가 나오면 던질 기회 +1
             if result in ["윷", "모"]: 
                 self.current_player.throw_count += 1
-            msg = f"🎲 **{result}**가 나왔습니다!"
             
         self.selected_horse_pos = None
+
+        is_turn_end = False
         
-        # ⭐️ 턴 강제 종료 판정 부분 (던질 기회도 없고 이동할 윷도 없을 때)
-        if self.current_player.throw_count == 0 and len(self.current_player.move_list) == 0:
+        if self.current_player.throw_count == 0:
+            if self.current_player.active_buff == "테이크 아웃":
+                # 테이크아웃: 던질 기회가 끝나면 무조건 턴 종료 & 보관
+                self.current_player.takeout_storage.extend(self.current_player.move_list)
+                self.current_player.active_buff = None
+                msg += f"\n☕ 결과를 보관하고 {self.current_player.member.display_name}에게 턴을 넘깁니다."
+                is_turn_end = True
+            elif len(self.current_player.move_list) == 0:
+                msg += f"\n🔄 이동할 수 없어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
+                is_turn_end = True
+
+        if is_turn_end:
             enemy = self.player2 if self.current_player == self.player1 else self.player1
             self.current_player = enemy
-
             self.turn_count += 1
-
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
             self.current_player.has_thrown = False 
-            
             self.current_player.move_list.clear()
-            msg += f"\n🔄 이동할 수 없어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
+            
+            # ⭐️ 다음 턴을 시작하는 플레이어의 보관함에 있던 윷을 꺼내줌!
+            if self.current_player.takeout_storage:
+                self.current_player.move_list.extend(self.current_player.takeout_storage)
+                self.current_player.takeout_storage.clear()
+                msg += f"\n🥡 **{self.current_player.member.display_name}**님이 테이크 아웃으로 보관했던 윷을 꺼내왔습니다!"
             
         await self.update_ui(interaction, msg)
 
@@ -1201,32 +1273,49 @@ class YutGameView(discord.ui.View):
             me.throw_count += 1 # ⭐️ 상대 말을 잡으면 윷 던지기 기회 +1 !
             msg = f"⚔️ **상대방의 말을 {catch_count}개 잡았습니다!!** (한 번 더 던질 수 있습니다 🎲)"
             
-        # 5. 턴 종료 판정 (던질 기회도 없고, 남은 리스트도 없으면 상대 턴으로!)
         if me.throw_count == 0 and len(me.move_list) == 0:
             self.current_player = enemy
-
             self.turn_count += 1
-
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
             self.current_player.has_thrown = False 
-            
             self.current_player.move_list.clear()
             msg += f"\n🔄 턴이 종료되어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
+            
+            # ⭐️ 보관함 언패킹!
+            if self.current_player.takeout_storage:
+                self.current_player.move_list.extend(self.current_player.takeout_storage)
+                self.current_player.takeout_storage.clear()
+                msg += f"\n🥡 **{self.current_player.member.display_name}**님이 테이크 아웃으로 보관했던 윷을 꺼내왔습니다!"
             
         await self.update_ui(interaction, msg)
 
     # 턴 넘기기 버튼 로직
     async def btn_skip_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player.member.id: return
+        
+        # ⭐️ 스킵할 때 혹시 테이크아웃이 켜져 있으면 강제로 보관
+        if self.current_player.active_buff == "테이크 아웃":
+            self.current_player.takeout_storage.extend(self.current_player.move_list)
+            self.current_player.active_buff = None
+
         self.current_player = self.player2 if self.current_player == self.player1 else self.player1
         self.turn_count += 1
         self.current_player.throw_count = 1
         self.current_player.used_skill = False
-        self.current_player.has_thrown = False
+        self.current_player.has_thrown = False 
         self.current_player.move_list.clear()
         self.selected_horse_pos = None
-        await self.update_ui(interaction, f"⏭️ 턴을 강제로 넘겼습니다.")
+        
+        msg = "⏭️ 턴을 강제로 넘겼습니다."
+        
+        # ⭐️ 보관함 언패킹!
+        if self.current_player.takeout_storage:
+            self.current_player.move_list.extend(self.current_player.takeout_storage)
+            self.current_player.takeout_storage.clear()
+            msg += f"\n🥡 **{self.current_player.member.display_name}**님이 보관했던 윷을 꺼내왔습니다!"
+            
+        await self.update_ui(interaction, msg)
 
     # ⭐️ [수정됨] 임베드에 텍스트 대신 방금 만든 이미지를 첨부!
     def create_board_embed(self):
@@ -1323,7 +1412,8 @@ BACKWARD_MAP = {
 
 # ⭐️ 윷 결과값을 숫자(이동 칸 수)로 바꿔주는 헬퍼 함수
 def yut_to_number(yut_str):
-    mapping = {"도": 1, "개": 2, "걸": 3, "윷": 4, "모": 5, "빽도": -1}
+    mapping = {"도": 1, "개": 2, "걸": 3, "윷": 4, "모": 5, "빽도": -1,
+               "-도": -1, "-개": -2, "-걸": -3, "-윷": -4, "-모": -5, "-빽도": 1}
     return mapping.get(yut_str, 0)
 
 # ⭐️ 현재 위치와 이동 칸 수를 주면 '도착할 위치'를 뱉어내는 헬퍼 함수
@@ -1340,6 +1430,11 @@ def calculate_arrival(current_pos, move_value):
         for _ in range(steps):
             next_nodes = set()
             for node in current_nodes:
+                # ⭐️ [핵심 추가] 후진하다가 0번 칸(결승선 대기)에 도달하면 더 이상 후진하지 않고 멈춤!
+                if node == 0:
+                    next_nodes.add(0)
+                    continue
+                
                 # 해당 노드에서 갈 수 있는 모든 뒤쪽 경로를 탐색
                 for back_node in BACKWARD_MAP.get(node, [node]):
                     next_nodes.add(back_node)
