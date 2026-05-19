@@ -1063,13 +1063,22 @@ class YutGameView(discord.ui.View):
                 for yut_str in unique_moves:
                     move_val = yut_to_number(yut_str)
                     
-                    # ⭐️ 헬퍼 함수가 리스트를 반환하므로 반복문으로 처리!
+                    # ⭐️ [핵심] 백스텝 버프가 켜져 있다면 이동 칸 수를 음수로 뒤집기!
+                    is_backstep = (self.current_player.active_buff == "백스텝")
+                    if is_backstep:
+                        move_val = -move_val
+                    
                     destinations = calculate_arrival(self.selected_horse_pos, move_val)
                     
-                    for dest in destinations: # ⭐️ 갈림길이 2개면 버튼이 2개 생김!
+                    for dest in destinations:
                         valid_move_exists = True
                         dest_label = "🏁 골인하기" if dest == 99 else f"📍 {dest}번 칸으로 이동"
-                        btn_move = discord.ui.Button(label=f"{dest_label} ({yut_str})", style=discord.ButtonStyle.success)
+                        
+                        # 버튼에 텍스트 표시도 백스텝이면 '-'를 달아서 보여줌
+                        display_yut = f"-{yut_str}" if is_backstep else yut_str
+                        
+                        btn_move = discord.ui.Button(label=f"{dest_label} ({display_yut})", style=discord.ButtonStyle.success)
+                        # callback에는 변환되지 않은 원래 윷 이름(yut_str)을 넘겨줌!
                         btn_move.callback = lambda i, d=dest, y=yut_str: self.btn_move_callback(i, d, y)
                         self.add_item(btn_move)
                         
@@ -1181,15 +1190,14 @@ class YutGameView(discord.ui.View):
                 self.current_player.move_list.extend([result, result]) 
                 self.current_player.active_buff = None 
                 msg = f"✌️ 디스 이즈 더블더블 효과로 **{result}**가 두 번 적용됩니다!!"
-            elif self.current_player.active_buff == "백스텝":
-                # ⭐️ 결과 앞에 '-'를 붙여서 리스트에 넣고 버프 소모!
-                backstep_result = f"-{result}"
-                self.current_player.move_list.append(backstep_result)
-                self.current_player.active_buff = None 
-                msg = f"⏪ 백스텝 발동! **{result}**가 뒤로 가는 **{backstep_result}**로 변환되었습니다!"
             else:
+                # ⭐️ 백스텝이어도 결과는 그냥 평범하게 넣음! (버프는 소모 안 함!)
                 self.current_player.move_list.append(result)
                 msg = f"🎲 **{result}**가 나왔습니다!"
+                
+                # 안내 메시지 살짝 추가
+                if self.current_player.active_buff == "백스텝":
+                    msg += "\n(⏪ **백스텝 대기 중:** 다음에 선택하는 이동이 뒤로 가게 됩니다!)"
             
             # 윷이나 모가 나오면 던질 기회 +1
             if result in ["윷", "모"]: 
@@ -1257,6 +1265,10 @@ class YutGameView(discord.ui.View):
         self.selected_horse_pos = None # 이동 후 선택 초기화
         
         msg = f"🐎 말이 {dest}번 칸으로 이동했습니다! ({used_yut} 사용)"
+
+        if me.active_buff == "백스텝":
+            me.active_buff = None
+            msg = f"⏪ 백스텝 효과 적용! 말이 뒤로 이동하여 {dest}번 칸에 도착했습니다! (-{used_yut} 사용)"
         
         # 3. 골인 판정
         if dest == 99:
@@ -1297,7 +1309,8 @@ class YutGameView(discord.ui.View):
         # ⭐️ 스킵할 때 혹시 테이크아웃이 켜져 있으면 강제로 보관
         if self.current_player.active_buff == "테이크 아웃":
             self.current_player.takeout_storage.extend(self.current_player.move_list)
-            self.current_player.active_buff = None
+            
+        self.current_player.active_buff = None
 
         self.current_player = self.player2 if self.current_player == self.player1 else self.player1
         self.turn_count += 1
