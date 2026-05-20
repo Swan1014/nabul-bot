@@ -730,9 +730,8 @@ class YutPlayer:
         self.move_list = []
         self.throw_count = 1
         self.used_skill = False
-        
-        # ⭐️ 꼼수 방지용 스위치 추가!
-        self.has_thrown = False 
+        self.has_thrown = False
+        self.is_resolving_skill = False
 
         # ⭐️ 초능력 시스템용 특수 변수들
         self.yut_skill = ""
@@ -802,6 +801,8 @@ class SkillSelectView(discord.ui.View):
             
         if self.game_view.current_player.member.id != self.player.member.id:
             return await interaction.response.send_message("❌ 이미 당신의 턴이 지났습니다!", ephemeral=True)
+        if self.player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 이미 다른 초능력을 진행 중입니다!", ephemeral=True)
         if self.player.has_thrown:
             return await interaction.response.send_message("❌ 이미 윷을 던진 후에는 초능력을 사용할 수 없습니다!", ephemeral=True)
         if self.player.used_skill:
@@ -822,7 +823,7 @@ class SkillSelectView(discord.ui.View):
         if self.player.yut_skill == "개와 돼지의 시간":
             self.player.throw_count = 0 # 윷 던지기 기회 박탈!
             self.player.move_list.extend(["도", "개"]) # 리스트에 강제 주입!
-            msg = f"🐶🐷 **{self.player.member.display_name}**님이 **[개와 돼지의 시간]**을 발동했습니다!\n(윷을 던지지 않고 '도'와 '개'를 획득합니다)"
+            msg = f"🐶🐷 **{self.player.member.display_name}**님이 **[개와 돼지의 시간]**을 발동했습니다!\n(윷을 던지지 않고 '도'와 '개'를 획득합니다!)"
 
         # ==========================================
         # 🐎 스킬 2: 100 마력
@@ -864,14 +865,14 @@ class SkillSelectView(discord.ui.View):
         # ==========================================
         elif self.player.yut_skill == "테이크 아웃":
             self.player.active_buff = "테이크 아웃"
-            msg = f"☕ **{self.player.member.display_name}**님이 **[테이크 아웃]**을 발동했습니다!\n(이번 턴의 윷 결과를 보관해 두었다가 다음 턴에 같이 사용합니다.)"
+            msg = f"☕ **{self.player.member.display_name}**님이 **[테이크 아웃]**을 발동했습니다!\n(이번 턴의 윷 결과를 보관해 두었다가 다음 턴에 같이 사용합니다!)"
 
         # ==========================================
         # ⏪ 스킬 8: 백스텝
         # ==========================================
         elif self.player.yut_skill == "백스텝":
             self.player.active_buff = "백스텝"
-            msg = f"⏪ **{self.player.member.display_name}**님이 **[백스텝]**을 발동했습니다!\n(이번에 던지는 첫 번째 윷은 뒤로 이동합니다!)"
+            msg = f"⏪ **{self.player.member.display_name}**님이 **[백스텝]**을 발동했습니다!\n(윷 결과 중 하나를 선택해서 뒤로 이동합니다!)"
 
         # ⭐️ 메인 게임판(본체) 업데이트 명령을 내림!
         await self.game_view.update_ui(message_text=msg)
@@ -880,15 +881,121 @@ class SkillSelectView(discord.ui.View):
         # ⭐️ [유통기한 검사] 여기도 차단!
         if self.opened_turn != self.game_view.turn_count:
             return await interaction.response.send_message("❌ 이 메뉴는 지난 턴에 열렸습니다! 윷판 아래의 버튼을 눌러 새로 열어주세요.", ephemeral=True)
-            
         if self.game_view.current_player.member.id != self.player.member.id:
             return await interaction.response.send_message("❌ 이미 당신의 턴이 지났습니다!", ephemeral=True)
+        if self.player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 이미 다른 초능력을 진행 중입니다!", ephemeral=True)
         if self.player.has_thrown:
             return await interaction.response.send_message("❌ 이미 윷을 던진 후에는 초능력을 사용할 수 없습니다!", ephemeral=True)
         if self.player.used_skill:
             return await interaction.response.send_message("❌ 이번 턴에는 이미 다른 초능력을 사용했습니다!", ephemeral=True)
 
-        await interaction.response.send_message(f"🔮 **[{self.player.board_skill}]** 스킬을 선택했습니다! (기능 공사 중 🛠️)", ephemeral=True)
+        # 상대방 플레이어 찾기
+        enemy = self.game_view.player2 if self.player == self.game_view.player1 else self.game_view.player1
+
+        # ==========================================
+        # 🌪️ 스킬 1: 강제 귀가
+        # ==========================================
+        if self.player.board_skill == "강제 귀가":
+            active_enemy_horses = set(h for h in enemy.horses if 0 <= h < 30)
+            
+            if not active_enemy_horses:
+                return await interaction.response.send_message("❌ 윷판 위에 쫓아낼 상대방의 말이 없습니다!", ephemeral=True)
+                
+            # ⭐️ 대상을 고르기 전까지 윷판을 조작할 수 없게 자물쇠 찰칵! (물리기 불가)
+            self.player.is_resolving_skill = True
+                
+            options = []
+            for pos in active_enemy_horses:
+                count = enemy.horses.count(pos)
+                options.append(discord.SelectOption(
+                    label=f"📍 {pos}번 칸의 말", 
+                    description=f"{count}개가 뭉쳐있습니다.", 
+                    value=str(pos)
+                ))
+                
+            select = discord.ui.Select(placeholder="쫓아낼 상대방의 말을 선택하세요!", options=options)
+            
+            async def select_callback(inter: discord.Interaction):
+                target_pos = int(select.values[0])
+                
+                catch_count = 0
+                for i in range(4):
+                    if enemy.horses[i] == target_pos:
+                        enemy.horses[i] = -1
+                        catch_count += 1
+                        
+                # ⭐️ 대상 선택 완료! 자물쇠 해제 및 스킬 소모 처리
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                msg = f"🌪️ **{self.player.member.display_name}**님이 **[강제 귀가]**를 발동했습니다!\n(상대방의 {target_pos}번 칸 말 {catch_count}개가 대기실로 쫓겨납니다!)"
+                
+                # ⭐️ 네가 요청한 깔끔한 완료 메시지로 교체!
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            select.callback = select_callback
+            view = discord.ui.View()
+            view.add_item(select)
+            
+            await interaction.response.edit_message(content="👇 강제 귀가시킬 상대방의 말을 고르세요:", view=view)
+
+        # ==========================================
+        # 🎒 스킬 2: 업고 가실게요
+        # ==========================================
+        elif self.player.board_skill == "업고 가실게요":
+            # 1. 윷판 위(0~29)에 있는 내 말 위치 모으기
+            active_my_horses = set(h for h in self.player.horses if 0 <= h < 30)
+            # 2. 대기실(-1)에 있는 내 말 개수 확인
+            waiting_horses = self.player.horses.count(-1)
+            
+            # ⭐️ 예외 처리: 판 위에 내 말이 없거나, 대기실에 남은 말이 없으면 차단!
+            if not active_my_horses:
+                return await interaction.response.send_message("❌ 윷판 위에 내 말이 없어 업을 수 없습니다!", ephemeral=True)
+            if waiting_horses == 0:
+                return await interaction.response.send_message("❌ 대기실에 남아있는 말이 없어 업힐 수 없습니다!", ephemeral=True)
+                
+            # ⭐️ 대상을 고르기 전까지 자물쇠 찰칵!
+            self.player.is_resolving_skill = True
+                
+            options = []
+            for pos in active_my_horses:
+                count = self.player.horses.count(pos)
+                options.append(discord.SelectOption(
+                    label=f"📍 {pos}번 칸의 내 말", 
+                    description=f"현재 {count}개가 있습니다. (대기실 말 1개 추가 업기)", 
+                    value=str(pos)
+                ))
+                
+            select = discord.ui.Select(placeholder="대기실의 말을 업을 내 말을 선택하세요!", options=options)
+            
+            async def select_callback(inter: discord.Interaction):
+                target_pos = int(select.values[0])
+                
+                # ⭐️ 대기실(-1)에 있는 말 딱 '하나'를 찾아서 target_pos로 이동!
+                for i in range(4):
+                    if self.player.horses[i] == -1:
+                        self.player.horses[i] = target_pos
+                        break # 하나만 업어야 하니까 무조건 break!
+                        
+                # 자물쇠 해제 및 스킬 소모 처리
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                msg = f"🎒 **{self.player.member.display_name}**님이 **[업고 가실게요]**를 발동했습니다!\n(대기실의 말 1개가 {target_pos}번 칸의 말에 업혔습니다!)"
+                
+                # 완료 메시지 띄우고 본체 새로고침!
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            select.callback = select_callback
+            view = discord.ui.View()
+            view.add_item(select)
+            
+            await interaction.response.edit_message(content="👇 업을 내 말을 고르세요:\n*(대상을 선택해야 윷을 던질 수 있습니다)*", view=view)
 
 class YutGameView(discord.ui.View):
     def __init__(self, p1: discord.Member, p2: discord.Member, is_superpower: bool = False):
@@ -1102,19 +1209,11 @@ class YutGameView(discord.ui.View):
         if interaction.user.id != self.current_player.member.id:
             return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
             
-        # ⭐️ 에페머럴(비밀) 뷰를 띄워줌!
-        skill_view = SkillSelectView(self, self.current_player)
-        await interaction.response.send_message("👇 사용하실 초능력을 선택하세요! (나에게만 보입니다)", view=skill_view, ephemeral=True)
-
-    # ⭐️ 화면을 새로고침하는 헬퍼 함수
-    # ⭐️ 초능력 버튼 콜백 함수 (윷판 메시지 주소 저장 로직 추가)
-    async def btn_skill_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.current_player.member.id:
-            return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
+        # ⭐️ [버그 픽스] 이미 대상 선택(드롭다운) 중이라면 새로운 메뉴 열기 차단!
+        if self.current_player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 이미 초능력 대상을 선택 중입니다! 띄워진 드롭다운 메뉴를 먼저 완료해주세요.", ephemeral=True)
             
-        # ⭐️ 비밀 메뉴를 띄우기 직전에, 이 버튼이 달려있는 진짜 윷판 메시지 객체를 꽉 쥐어둠!
         self.board_message = interaction.message 
-            
         skill_view = SkillSelectView(self, self.current_player)
         await interaction.response.send_message("👇 사용하실 초능력을 선택하세요! (나에게만 보입니다)", view=skill_view, ephemeral=True)
 
@@ -1152,7 +1251,10 @@ class YutGameView(discord.ui.View):
     async def btn_throw_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player.member.id:
             return await interaction.response.send_message("당신의 턴이 아닙니다!", ephemeral=True)
-            
+        
+        if self.current_player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 초능력을 사용 중일 때는 윷을 던질 수 없습니다!", ephemeral=True)
+        
         self.current_player.has_thrown = True 
         
         import random
@@ -1194,10 +1296,6 @@ class YutGameView(discord.ui.View):
                 # ⭐️ 백스텝이어도 결과는 그냥 평범하게 넣음! (버프는 소모 안 함!)
                 self.current_player.move_list.append(result)
                 msg = f"🎲 **{result}**가 나왔습니다!"
-                
-                # 안내 메시지 살짝 추가
-                if self.current_player.active_buff == "백스텝":
-                    msg += "\n(⏪ **백스텝 대기 중:** 다음에 선택하는 이동이 뒤로 가게 됩니다!)"
             
             # 윷이나 모가 나오면 던질 기회 +1
             if result in ["윷", "모"]: 
@@ -1224,7 +1322,8 @@ class YutGameView(discord.ui.View):
             self.turn_count += 1
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
-            self.current_player.has_thrown = False 
+            self.current_player.has_thrown = False
+            self.current_player.is_resolving_skill = False
             self.current_player.move_list.clear()
             
             # ⭐️ 다음 턴을 시작하는 플레이어의 보관함에 있던 윷을 꺼내줌!
@@ -1290,7 +1389,8 @@ class YutGameView(discord.ui.View):
             self.turn_count += 1
             self.current_player.throw_count = 1
             self.current_player.used_skill = False
-            self.current_player.has_thrown = False 
+            self.current_player.has_thrown = False
+            self.current_player.is_resolving_skill = False
             self.current_player.move_list.clear()
             msg += f"\n🔄 턴이 종료되어 **{self.current_player.member.display_name}**의 차례로 넘어갑니다."
             
@@ -1305,6 +1405,9 @@ class YutGameView(discord.ui.View):
     # 턴 넘기기 버튼 로직
     async def btn_skip_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.current_player.member.id: return
+
+        if self.current_player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 이미 초능력을 사용하기로 했습니다! 대상을 선택해주세요.", ephemeral=True)
         
         # ⭐️ 스킵할 때 혹시 테이크아웃이 켜져 있으면 강제로 보관
         if self.current_player.active_buff == "테이크 아웃":
@@ -1317,6 +1420,7 @@ class YutGameView(discord.ui.View):
         self.current_player.throw_count = 1
         self.current_player.used_skill = False
         self.current_player.has_thrown = False 
+        self.current_player.is_resolving_skill = False
         self.current_player.move_list.clear()
         self.selected_horse_pos = None
         
