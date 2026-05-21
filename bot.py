@@ -883,8 +883,6 @@ class SkillSelectView(discord.ui.View):
             return await interaction.response.send_message("❌ 이 메뉴는 지난 턴에 열렸습니다! 윷판 아래의 버튼을 눌러 새로 열어주세요.", ephemeral=True)
         if self.game_view.current_player.member.id != self.player.member.id:
             return await interaction.response.send_message("❌ 이미 당신의 턴이 지났습니다!", ephemeral=True)
-        if self.player.is_resolving_skill:
-            return await interaction.response.send_message("❌ 이미 다른 초능력을 진행 중입니다!", ephemeral=True)
         if self.player.has_thrown:
             return await interaction.response.send_message("❌ 이미 윷을 던진 후에는 초능력을 사용할 수 없습니다!", ephemeral=True)
         if self.player.used_skill:
@@ -917,6 +915,9 @@ class SkillSelectView(discord.ui.View):
             select = discord.ui.Select(placeholder="쫓아낼 상대방의 말을 선택하세요!", options=options)
             
             async def select_callback(inter: discord.Interaction):
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
                 target_pos = int(select.values[0])
                 
                 catch_count = 0
@@ -972,6 +973,9 @@ class SkillSelectView(discord.ui.View):
             select = discord.ui.Select(placeholder="대기실의 말을 업을 내 말을 선택하세요!", options=options)
             
             async def select_callback(inter: discord.Interaction):
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
                 target_pos = int(select.values[0])
                 
                 # ⭐️ 대기실(-1)에 있는 말 딱 '하나'를 찾아서 target_pos로 이동!
@@ -996,6 +1000,390 @@ class SkillSelectView(discord.ui.View):
             view.add_item(select)
             
             await interaction.response.edit_message(content="👇 업을 내 말을 고르세요:\n*(대상을 선택해야 윷을 던질 수 있습니다)*", view=view)
+
+        # ==========================================
+        # 🔄 스킬 3: 자리 좀 바꿔주세요
+        # ==========================================
+        elif self.player.board_skill == "자리 좀 바꿔주세요":
+            # 1. 윷판 위(0~29)에 있는 양쪽 플레이어의 말 위치 모으기
+            active_my_horses = set(h for h in self.player.horses if 0 <= h < 30)
+            active_enemy_horses = set(h for h in enemy.horses if 0 <= h < 30)
+            
+            # ⭐️ 예외 처리: 교체할 말이 윷판 위에 하나라도 없으면 스킬 차단!
+            if not active_my_horses or not active_enemy_horses:
+                return await interaction.response.send_message("❌ 윷판 위에 교체할 내 말과 상대방 말이 모두 있어야 합니다!", ephemeral=True)
+                
+            # ⭐️ 자물쇠 찰칵!
+            self.player.is_resolving_skill = True
+            
+            # 2. 드롭다운 메뉴 2개 만들기 (내 말 선택용, 상대 말 선택용)
+            my_options = [discord.SelectOption(label=f"📍 {pos}번 칸의 내 말", description=f"{self.player.horses.count(pos)}개가 뭉쳐있습니다.", value=str(pos)) for pos in active_my_horses]
+            select_mine = discord.ui.Select(placeholder="1️⃣ 위치를 바꿀 '내 말'을 선택하세요", options=my_options)
+            
+            enemy_options = [discord.SelectOption(label=f"📍 {pos}번 칸의 상대 말", description=f"{enemy.horses.count(pos)}개가 뭉쳐있습니다.", value=str(pos)) for pos in active_enemy_horses]
+            select_enemy = discord.ui.Select(placeholder="2️⃣ 위치를 바꿀 '상대방 말'을 선택하세요", options=enemy_options)
+            
+            # 3. 최종 확인 버튼 만들기
+            btn_confirm = discord.ui.Button(label="자리 바꾸기 실행! 🔄", style=discord.ButtonStyle.primary, row=2)
+            
+            # 유저가 선택한 값을 임시로 저장해둘 공간 (딕셔너리 활용)
+            selections = {"mine": None, "enemy": None}
+            
+            # 각각의 드롭다운을 눌렀을 때 값을 저장하는 콜백
+            async def mine_callback(inter: discord.Interaction):
+                selections["mine"] = int(select_mine.values[0])
+                await inter.response.defer() # 조용히 값만 저장하고 넘김
+                
+            async def enemy_callback(inter: discord.Interaction):
+                selections["enemy"] = int(select_enemy.values[0])
+                await inter.response.defer()
+                
+            # 최종 확인 버튼을 눌렀을 때 작동하는 진짜 스킬 콜백!
+            async def confirm_callback(inter: discord.Interaction):
+                # ⭐️ [중복 실행 방어턱] 다중창 꼼수 차단
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
+                # ⭐️ 둘 중 하나라도 선택 안 하고 버튼부터 누르면 경고!
+                if selections["mine"] is None or selections["enemy"] is None:
+                    return await inter.response.send_message("❌ 내 말과 상대방 말을 모두 선택한 후 실행 버튼을 눌러주세요!", ephemeral=True)
+                    
+                my_pos = selections["mine"]
+                enemy_pos = selections["enemy"]
+                
+                # ⭐️ 덩어리째 교체하는 핵심 로직!
+                # 각 위치에 해당하는 말들의 인덱스를 싹 긁어옴
+                my_indices = [i for i, pos in enumerate(self.player.horses) if pos == my_pos]
+                enemy_indices = [i for i, pos in enumerate(enemy.horses) if pos == enemy_pos]
+                
+                # 위치 스왑 적용! (업혀 있는 말들도 한 번에 싹 다 바뀜)
+                for i in my_indices:
+                    self.player.horses[i] = enemy_pos
+                for i in enemy_indices:
+                    enemy.horses[i] = my_pos
+                    
+                # 락 해제 및 스킬 소모
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                my_count = len(my_indices)
+                enemy_count = len(enemy_indices)
+                msg = f"🔄 **{self.player.member.display_name}**님이 **[자리 좀 바꿔주세요]**를 발동했습니다!\n(내 말 {my_count}개와 상대방 말 {enemy_count}개가 서로 위치를 바꿨습니다!)"
+                
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            # 부품들 조립!
+            select_mine.callback = mine_callback
+            select_enemy.callback = enemy_callback
+            btn_confirm.callback = confirm_callback
+            
+            view = discord.ui.View()
+            view.add_item(select_mine)
+            view.add_item(select_enemy)
+            view.add_item(btn_confirm) # 확인 버튼 장착!
+            
+            await interaction.response.edit_message(content="👇 위치를 교체할 내 말과 상대방 말을 모두 선택한 후 실행 버튼을 누르세요:\n*(대상을 선택해야 윷을 던질 수 있습니다)*", view=view)   
+
+        # ==========================================
+        # 🧲 스킬 4: 제 앞에 놔주세요
+        # ==========================================
+        elif self.player.board_skill == "제 앞에 놔주세요":
+            active_my_horses = set(h for h in self.player.horses if 0 <= h < 30)
+            active_enemy_horses = set(h for h in enemy.horses if 0 <= h < 30)
+            
+            # ⭐️ 예외 처리 1: 윷판 위에 양쪽 말이 모두 있어야 함!
+            if not active_my_horses or not active_enemy_horses:
+                return await interaction.response.send_message("❌ 윷판 위에 내 말과 상대방 말이 모두 있어야 합니다!", ephemeral=True)
+                
+            # ⭐️ 내 말들 기준으로 앞 1~3칸의 유효한 목적지(칸 번호) 모두 계산하기!
+            valid_destinations = set()
+            for pos in active_my_horses:
+                for step in [1, 2, 3]: # 1칸, 2칸, 3칸 앞 탐색
+                    dests = calculate_arrival(pos, step)
+                    for d in dests:
+                        if 0 <= d < 30 and d not in active_my_horses:
+                            valid_destinations.add(d)
+                            
+            # ⭐️ 예외 처리 2: 내 말이 결승점 코앞이라 1~3칸 앞이 모두 골인(99)인 경우 차단!
+            if not valid_destinations:
+                return await interaction.response.send_message("❌ 소환할 수 있는 유효한 위치가 없습니다! (내 말이 결승점에 너무 가깝습니다)", ephemeral=True)
+
+            # ⭐️ 자물쇠 찰칵!
+            self.player.is_resolving_skill = True
+            
+            # 1. 적 말 선택용 드롭다운
+            enemy_options = [discord.SelectOption(label=f"📍 {pos}번 칸의 상대 말", description=f"{enemy.horses.count(pos)}개가 뭉쳐있습니다.", value=str(pos)) for pos in active_enemy_horses]
+            select_enemy = discord.ui.Select(placeholder="1️⃣ 끌고 올 '상대방 말'을 선택하세요", options=enemy_options)
+            
+            # 2. 목적지 선택용 드롭다운 (오름차순으로 깔끔하게 정렬!)
+            dest_options = [discord.SelectOption(label=f"🎯 {dest}번 칸으로 소환", description="내 말의 앞 3칸 이내입니다.", value=str(dest)) for dest in sorted(list(valid_destinations))]
+            select_dest = discord.ui.Select(placeholder="2️⃣ 소환할 '목적지'를 선택하세요", options=dest_options)
+            
+            # 3. 최종 확인 버튼
+            btn_confirm = discord.ui.Button(label="소환 실행! 🧲", style=discord.ButtonStyle.primary, row=2)
+            
+            selections = {"enemy": None, "dest": None}
+            
+            async def enemy_callback(inter: discord.Interaction):
+                selections["enemy"] = int(select_enemy.values[0])
+                await inter.response.defer()
+                
+            async def dest_callback(inter: discord.Interaction):
+                selections["dest"] = int(select_dest.values[0])
+                await inter.response.defer()
+                
+            # 실행 버튼 콜백
+            async def confirm_callback(inter: discord.Interaction):
+                # ⭐️ [중복 실행 방어턱] 꼼수 완벽 차단!
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
+                if selections["enemy"] is None or selections["dest"] is None:
+                    return await inter.response.send_message("❌ 상대방 말과 목적지를 모두 선택한 후 실행 버튼을 눌러주세요!", ephemeral=True)
+                    
+                enemy_pos = selections["enemy"]
+                target_dest = selections["dest"]
+                
+                # ⭐️ 타겟 위치에 있는 상대방 말을 덩어리째 목적지로 텔레포트!
+                enemy_indices = [i for i, pos in enumerate(enemy.horses) if pos == enemy_pos]
+                for i in enemy_indices:
+                    enemy.horses[i] = target_dest
+                    
+                # 락 해제 및 스킬 소모
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                enemy_count = len(enemy_indices)
+                msg = f"🧲 **{self.player.member.display_name}**님이 **[제 앞에 놔주세요]**를 발동했습니다!\n(상대방 말 {enemy_count}개를 내 말 앞의 {target_dest}번 칸으로 강제 소환했습니다!)"
+                
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            select_enemy.callback = enemy_callback
+            select_dest.callback = dest_callback
+            btn_confirm.callback = confirm_callback
+            
+            view = discord.ui.View()
+            view.add_item(select_enemy)
+            view.add_item(select_dest)
+            view.add_item(btn_confirm)
+            
+            await interaction.response.edit_message(content="👇 끌고 올 상대방 말과 소환할 위치를 선택한 후 실행 버튼을 누르세요:\n*(대상을 선택해야 윷을 던질 수 있습니다)*", view=view)
+        
+        # ==========================================
+        # 🫂 스킬 5: 백허그
+        # ==========================================
+        elif self.player.board_skill == "백허그":
+            active_my_horses = set(h for h in self.player.horses if 0 <= h < 30)
+            active_enemy_horses = set(h for h in enemy.horses if 0 <= h < 30)
+            
+            if not active_my_horses or not active_enemy_horses:
+                return await interaction.response.send_message("❌ 윷판 위에 내 말과 상대방 말이 모두 있어야 합니다!", ephemeral=True)
+                
+            # ⭐️ 자물쇠 찰칵!
+            self.player.is_resolving_skill = True
+            
+            # 1. 적 말 선택용 드롭다운 (기준점)
+            enemy_options = [discord.SelectOption(label=f"📍 {pos}번 칸의 상대 말", description=f"이 말의 1칸 뒤로 이동합니다.", value=str(pos)) for pos in active_enemy_horses]
+            select_enemy = discord.ui.Select(placeholder="1️⃣ 타겟할 '상대방 말'을 선택하세요", options=enemy_options)
+            
+            # 2. 내 말 선택용 드롭다운 (이동할 녀석)
+            my_options = [discord.SelectOption(label=f"📍 {pos}번 칸의 내 말", description=f"{self.player.horses.count(pos)}개가 뭉쳐있습니다.", value=str(pos)) for pos in active_my_horses]
+            select_mine = discord.ui.Select(placeholder="2️⃣ 이동할 '내 말'을 선택하세요", options=my_options)
+            
+            # 3. 최종 확인 버튼
+            btn_confirm = discord.ui.Button(label="백허그 실행! 🫂", style=discord.ButtonStyle.primary, row=2)
+            
+            selections = {"enemy": None, "mine": None}
+            
+            async def enemy_callback(inter: discord.Interaction):
+                selections["enemy"] = int(select_enemy.values[0])
+                await inter.response.defer()
+                
+            async def mine_callback(inter: discord.Interaction):
+                selections["mine"] = int(select_mine.values[0])
+                await inter.response.defer()
+                
+            async def confirm_callback(inter: discord.Interaction):
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
+                if selections["enemy"] is None or selections["mine"] is None:
+                    return await inter.response.send_message("❌ 타겟할 적의 말과 이동할 내 말을 모두 선택해주세요!", ephemeral=True)
+                    
+                enemy_pos = selections["enemy"]
+                my_pos = selections["mine"]
+                
+                # ⭐️ [핵심] 적의 1칸 뒤 위치(목적지) 계산!
+                target_dest = calculate_arrival(enemy_pos, -1)[0]
+                
+                # 💥 목적지에 적의 '다른 말'이 있다면 잡아버리기! (연쇄 암살)
+                enemy_catch_indices = [i for i, pos in enumerate(enemy.horses) if pos == target_dest]
+                catch_count = len(enemy_catch_indices)
+                for i in enemy_catch_indices:
+                    enemy.horses[i] = -1
+                    
+                # 🎒 내 말을 덩어리째 목적지로 텔레포트!
+                my_indices = [i for i, pos in enumerate(self.player.horses) if pos == my_pos]
+                for i in my_indices:
+                    self.player.horses[i] = target_dest
+                    
+                # 락 해제 및 스킬 소모
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                my_count = len(my_indices)
+                msg = f"🫂 **{self.player.member.display_name}**님이 **[백허그]**를 발동했습니다!\n(내 말 {my_count}개가 상대방 말({enemy_pos}번)의 1칸 뒤인 {target_dest}번 칸으로 이동했습니다!)"
+                
+                # ⭐️ 잡기 또는 업기 발생 시 추가 메시지 출력!
+                if catch_count > 0:
+                    msg += f"\n💥 그리고 그 자리에 있던 적 말 {catch_count}개를 밟고 대기실로 쫓아냈습니다!!"
+                else:
+                    # 목적지에 내 말이 이미 있었다면 자연스럽게 업힘
+                    my_existing_count = self.player.horses.count(target_dest) - my_count
+                    if my_existing_count > 0:
+                        msg += f"\n🎒 목적지에 있던 내 말 {my_existing_count}개와 찰떡같이 업혔습니다!"
+                
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            select_enemy.callback = enemy_callback
+            select_mine.callback = mine_callback
+            btn_confirm.callback = confirm_callback
+            
+            view = discord.ui.View()
+            view.add_item(select_enemy)
+            view.add_item(select_mine)
+            view.add_item(btn_confirm)
+            
+            await interaction.response.edit_message(content="👇 타겟할 적의 말과 이동시킬 내 말을 선택한 후 실행 버튼을 누르세요:\n*(대상을 선택해야 윷을 던질 수 있습니다)*", view=view)
+
+        # ==========================================
+        # 🍲 스킬 6: 밥상 뒤집기
+        # ==========================================
+        elif self.player.board_skill == "밥상 뒤집기":
+            import random
+            
+            # 1. 윷판 위(0~29)에 있는 모든 '말의 위치(덩어리)' 수집
+            # set()을 사용하면 같은 칸에 있는 말들은 1개의 위치로 합쳐짐(덩어리 단위 인식)
+            active_positions = set()
+            for h in self.player.horses:
+                if 0 <= h < 30: active_positions.add(h)
+            for h in enemy.horses:
+                if 0 <= h < 30: active_positions.add(h)
+                
+            # ⭐️ 예외 처리: 판 위에 말이 하나도 없으면 엎을 밥상이 없음!
+            if not active_positions:
+                return await interaction.response.send_message("❌ 윷판 위에 재배치할 말이 없습니다!", ephemeral=True)
+                
+            # 2. 겹치지 않는 새로운 무작위 위치 뽑기! (0번 칸 포함, 0~29번)
+            # random.sample은 절대로 중복된 값을 뽑지 않으므로, 겹치는 상황 원천 차단!
+            chunk_count = len(active_positions)
+            new_positions = random.sample(range(30), chunk_count)
+            
+            # 3. 기존 위치 -> 새로운 위치 연결 지어주기 (매핑)
+            mapping = {old: new for old, new in zip(active_positions, new_positions)}
+            
+            # 4. 양쪽 플레이어의 말 위치 일괄 변경! (업혀있던 애들도 mapping을 따라 같이 이동)
+            for i in range(4):
+                if self.player.horses[i] in mapping:
+                    self.player.horses[i] = mapping[self.player.horses[i]]
+                if enemy.horses[i] in mapping:
+                    enemy.horses[i] = mapping[enemy.horses[i]]
+                    
+            # 5. 스킬 소모 처리 (이 스킬은 드롭다운이 필요 없으므로 즉시 발동!)
+            self.player.board_skill_used = True
+            self.player.used_skill = True
+            
+            msg = f"🍲 **{self.player.member.display_name}**님이 **[밥상 뒤집기]**를 발동했습니다!\n(우루루쾅쾅!! 윷판 위의 모든 말 {chunk_count}덩어리가 무작위 위치로 강제 재배치되었습니다!)"
+            
+            # 비밀 메뉴를 완료 메시지로 교체하고 윷판 본체 새로고침!
+            await interaction.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+            await self.game_view.update_ui(message_text=msg)
+
+        # ==========================================
+        # 🌀💣 스킬 7 & 8: 결승점이 코앞이네 / 폭발물 주의
+        # ==========================================
+        elif self.player.board_skill in ["결승점이 코앞이네", "폭발물 주의"]:
+            trap_type = "포탈" if self.player.board_skill == "결승점이 코앞이네" else "폭탄"
+            trap_emoji = "🌀" if trap_type == "포탈" else "💣"
+            
+            # 1. 윷판 위에 말이 있는 칸 수집 (여긴 설치 불가!)
+            active_positions = set()
+            for h in self.player.horses + enemy.horses:
+                if 0 <= h < 30: active_positions.add(h)
+                
+            # 2. 설치 가능한 빈 칸(0~29) 리스트 만들기
+            empty_positions = [pos for pos in range(30) if pos not in active_positions]
+            
+            if not empty_positions:
+                return await interaction.response.send_message("❌ 윷판에 빈 칸이 없어 설치할 수 없습니다!", ephemeral=True)
+                
+            # ⭐️ 자물쇠 찰칵!
+            self.player.is_resolving_skill = True
+            
+            # ⭐️ [스마트 해결법] 25개 제한 돌파! 리스트를 반으로 쪼개서 드롭다운 2개 만들기
+            options_1 = [discord.SelectOption(label=f"📍 {pos}번 칸에 설치", value=str(pos)) for pos in empty_positions if pos < 15]
+            options_2 = [discord.SelectOption(label=f"📍 {pos}번 칸에 설치", value=str(pos)) for pos in empty_positions if pos >= 15]
+            
+            # 옵션이 있는 경우에만 드롭다운 메뉴 생성
+            select1 = discord.ui.Select(placeholder=f"1️⃣ 0~14번 칸 중 선택 ({trap_type} 설치)", options=options_1) if options_1 else None
+            select2 = discord.ui.Select(placeholder=f"2️⃣ 15~29번 칸 중 선택 ({trap_type} 설치)", options=options_2) if options_2 else None
+            
+            btn_confirm = discord.ui.Button(label=f"{trap_type} 설치! {trap_emoji}", style=discord.ButtonStyle.danger if trap_type=="폭탄" else discord.ButtonStyle.primary, row=2)
+            
+            # 유저의 선택을 저장할 딕셔너리
+            selections = {"target": None}
+            
+            async def s1_callback(inter: discord.Interaction):
+                selections["target"] = int(select1.values[0])
+                await inter.response.defer()
+                
+            async def s2_callback(inter: discord.Interaction):
+                selections["target"] = int(select2.values[0])
+                await inter.response.defer()
+                
+            async def confirm_callback(inter: discord.Interaction):
+                if self.player.used_skill:
+                    return await inter.response.send_message("❌ 이미 스킬 처리가 완료되었습니다!", ephemeral=True)
+                
+                # 둘 중 아무것도 선택 안 했으면 경고
+                if selections["target"] is None:
+                    return await inter.response.send_message(f"❌ {trap_type}을 설치할 칸을 선택해주세요! (위/아래 메뉴 중 하나에서만 고르면 됩니다)", ephemeral=True)
+                    
+                target = selections["target"]
+                
+                # ⭐️ [핵심] 게임판의 traps 딕셔너리에 함정 기록!
+                # (우리가 YutGameView 초기화할 때 self.traps = {} 만들어둔 곳에 저장됨)
+                self.game_view.traps[target] = trap_type
+                
+                # 락 해제 및 스킬 소모
+                self.player.is_resolving_skill = False
+                self.player.board_skill_used = True
+                self.player.used_skill = True
+                
+                msg = f"{trap_emoji} **{self.player.member.display_name}**님이 **[{self.player.board_skill}]**을 발동했습니다!\n(윷판의 {target}번 칸에 누군가 지나가면 작동하는 **{trap_type}**이 설치되었습니다!)"
+                
+                await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인하세요.", view=None)
+                await self.game_view.update_ui(message_text=msg)
+                
+            # 있는 부품만 골라서 View에 조립하기
+            view = discord.ui.View()
+            if select1: 
+                select1.callback = s1_callback
+                view.add_item(select1)
+            if select2: 
+                select2.callback = s2_callback
+                view.add_item(select2)
+            
+            btn_confirm.callback = confirm_callback
+            view.add_item(btn_confirm)
+            
+            await interaction.response.edit_message(content=f"👇 {trap_type}을 설치할 위치를 선택한 후 실행 버튼을 누르세요:\n*(항목이 많아 2개의 드롭다운으로 분리되었습니다)*", view=view)
 
 class YutGameView(discord.ui.View):
     def __init__(self, p1: discord.Member, p2: discord.Member, is_superpower: bool = False):
@@ -1209,9 +1597,12 @@ class YutGameView(discord.ui.View):
         if interaction.user.id != self.current_player.member.id:
             return await interaction.response.send_message("지금은 당신의 턴이 아닙니다!", ephemeral=True)
             
-        # ⭐️ [버그 픽스] 이미 대상 선택(드롭다운) 중이라면 새로운 메뉴 열기 차단!
+        # ⭐️ [스마트 복구 시스템] 이미 자물쇠가 잠겨있다 = 드롭다운 창을 날려먹었다!
         if self.current_player.is_resolving_skill:
-            return await interaction.response.send_message("❌ 이미 초능력 대상을 선택 중입니다! 띄워진 드롭다운 메뉴를 먼저 완료해주세요.", ephemeral=True)
+            self.board_message = interaction.message 
+            skill_view = SkillSelectView(self, self.current_player)
+            # 에러 대신 복구 메시지와 함께 메뉴를 다시 띄워줌!
+            return await interaction.response.send_message("⚠️ 대상을 선택하던 창을 닫으셨군요? 아래 버튼을 눌러 다시 진행해주세요!", view=skill_view, ephemeral=True)
             
         self.board_message = interaction.message 
         skill_view = SkillSelectView(self, self.current_player)
@@ -1343,47 +1734,98 @@ class YutGameView(discord.ui.View):
         enemy = self.player2 if me == self.player1 else self.player1
         start_pos = self.selected_horse_pos
         
-        # ⭐️ 1. 말 이동 (대기실 출발 vs 윷판 이동 로직 분리!)
+        # 1. move_val 계산
+        move_val = yut_to_number(used_yut)
+        if me.active_buff == "백스텝":
+            move_val = -move_val
+
+        # ==================================================
+        # 🚨 [신규] 트랩 CCTV 발동 구역 (지나온 경로 추적)
+        # ==================================================
+        passed_tiles = []
+        # 대기실(-1)에서 출발하는 건 지나가는 경로가 없으므로 예외 처리!
+        if start_pos != -1: 
+            if move_val > 0:
+                path = FORWARD_PATHS[start_pos]
+                passed_tiles = path[1 : move_val + 1]
+            else:
+                steps = abs(move_val)
+                paths = [[start_pos]]
+                for _ in range(steps):
+                    new_paths = []
+                    for p in paths:
+                        node = p[-1]
+                        if node == 0:
+                            new_paths.append(p + [0])
+                            continue
+                        for back_node in BACKWARD_MAP.get(node, [node]):
+                            new_paths.append(p + [back_node])
+                    paths = new_paths
+                for p in paths:
+                    if p[-1] == dest:
+                        passed_tiles = p[1:]
+                        break
+
+        trap_msg = ""
+        for pt in passed_tiles:
+            if pt in self.traps:
+                trap_type = self.traps[pt]
+                trigger_pos = pt
+                del self.traps[pt] # 트랩 1회용 삭제
+                
+                if trap_type == "포탈":
+                    dest = 0
+                    trap_msg = f"\n🌀 **[앗! 포탈 작동!]** {trigger_pos}번 칸을 지나며 포탈을 밟았습니다! 말이 0번 칸으로 텔레포트합니다!"
+                elif trap_type == "폭탄":
+                    dest = -1
+                    trap_msg = f"\n💣 **[앗! 폭탄 펑!!]** {trigger_pos}번 칸을 지나며 폭탄을 밟았습니다! 말이 대기실로 쫓겨납니다!"
+                break 
+        # ==================================================
+
+        # ⭐️ 2. 말 이동 (네가 짰던 완벽한 대기실 1개 vs 윷판 덩어리 로직 복구!)
         moved_count = 0
         if start_pos == -1:
-            # [대기실 출발] 위치가 -1인 말 중에서 딱 '1개'만 찾아서 보냄!
             for i in range(4):
                 if me.horses[i] == -1:
                     me.horses[i] = dest
                     moved_count = 1
-                    break # ⭐️ 1개만 옮기고 즉시 탈출!
+                    break
         else:
-            # [윷판 이동] 이미 판에 나와 있는 말은 같은 칸에 있는(업힌) 애들 전부 묶어서 이동!
             for i in range(4):
                 if me.horses[i] == start_pos:
                     me.horses[i] = dest
                     moved_count += 1
                 
-        # 2. 이동 리스트에서 사용한 윷 지우기
+        # 3. 이동 리스트에서 사용한 윷 지우기
         me.move_list.remove(used_yut)
-        self.selected_horse_pos = None # 이동 후 선택 초기화
+        self.selected_horse_pos = None 
         
         msg = f"🐎 말이 {dest}번 칸으로 이동했습니다! ({used_yut} 사용)"
 
         if me.active_buff == "백스텝":
             me.active_buff = None
             msg = f"⏪ 백스텝 효과 적용! 말이 뒤로 이동하여 {dest}번 칸에 도착했습니다! (-{used_yut} 사용)"
-        
-        # 3. 골인 판정
+
+        # ⭐️ 트랩 메시지 합치기
+        if trap_msg:
+            msg += trap_msg
+
+        # ⭐️ 4. 골인 판정 (네가 짰던 점수 업데이트 로직 복구!)
         if dest == 99:
             me.score += moved_count
             msg = f"🎉 {moved_count}개의 말이 **골인**했습니다! (+{moved_count}점)"
             
-        # 4. 잡기 판정 (도착한 곳에 적의 말이 있다면?)
+        # ⭐️ 5. 잡기 판정 (네가 짰던 심플하고 깔끔한 로직 복구!)
         elif dest != -1 and dest in enemy.horses:
             catch_count = 0
             for i in range(4):
                 if enemy.horses[i] == dest:
-                    enemy.horses[i] = -1 # 대기실로 쫓아냄
+                    enemy.horses[i] = -1 
                     catch_count += 1
-            me.throw_count += 1 # ⭐️ 상대 말을 잡으면 윷 던지기 기회 +1 !
-            msg = f"⚔️ **상대방의 말을 {catch_count}개 잡았습니다!!** (한 번 더 던질 수 있습니다 🎲)"
+            me.throw_count += 1 
+            msg += f"\n⚔️ **상대방의 말을 {catch_count}개 잡았습니다!!** (한 번 더 던질 수 있습니다 🎲)"
             
+        # 6. 턴 종료 판정 (자물쇠 해제 포함, 네 코드 그대로!)
         if me.throw_count == 0 and len(me.move_list) == 0:
             self.current_player = enemy
             self.turn_count += 1
@@ -1399,6 +1841,38 @@ class YutGameView(discord.ui.View):
                 self.current_player.move_list.extend(self.current_player.takeout_storage)
                 self.current_player.takeout_storage.clear()
                 msg += f"\n🥡 **{self.current_player.member.display_name}**님이 테이크 아웃으로 보관했던 윷을 꺼내왔습니다!"
+            
+        await self.update_ui(interaction, msg)
+
+    # 턴 넘기기 버튼 로직
+    async def btn_skip_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.current_player.member.id: return
+
+        if self.current_player.is_resolving_skill:
+            return await interaction.response.send_message("❌ 이미 초능력을 사용하기로 했습니다! 대상을 선택해주세요.", ephemeral=True)
+        
+        # ⭐️ 스킵할 때 혹시 테이크아웃이 켜져 있으면 강제로 보관
+        if self.current_player.active_buff == "테이크 아웃":
+            self.current_player.takeout_storage.extend(self.current_player.move_list)
+            
+        self.current_player.active_buff = None
+
+        self.current_player = self.player2 if self.current_player == self.player1 else self.player1
+        self.turn_count += 1
+        self.current_player.throw_count = 1
+        self.current_player.used_skill = False
+        self.current_player.has_thrown = False 
+        self.current_player.is_resolving_skill = False
+        self.current_player.move_list.clear()
+        self.selected_horse_pos = None
+        
+        msg = "⏭️ 턴을 강제로 넘겼습니다."
+        
+        # ⭐️ 보관함 언패킹!
+        if self.current_player.takeout_storage:
+            self.current_player.move_list.extend(self.current_player.takeout_storage)
+            self.current_player.takeout_storage.clear()
+            msg += f"\n🥡 **{self.current_player.member.display_name}**님이 보관했던 윷을 꺼내왔습니다!"
             
         await self.update_ui(interaction, msg)
 
