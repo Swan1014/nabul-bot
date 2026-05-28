@@ -1379,7 +1379,7 @@ class SkillSelectView(discord.ui.View):
                 self.player.board_skill_used = True
                 self.player.used_skill = True
                 
-                msg = f"{trap_emoji} **{self.player.member.display_name}**이/가 **[{self.player.board_skill}]**을 발동했어!\n(윷판의 {target}번 칸에 {trap_type}이 설치됐어!)"
+                msg = f"{trap_emoji} **{self.player.member.display_name}**이/가 **[{self.player.board_skill}]**을/를 발동했어!\n(윷판의 {target}번 칸에 {trap_type}이 설치됐어!)"
                 
                 await inter.response.edit_message(content=f"🔮 **[{self.player.board_skill}]** 스킬 발동 완료! 윷판을 확인해줘!", view=None)
                 await self.game_view.update_ui(message_text=msg)
@@ -1856,15 +1856,21 @@ class YutGameView(discord.ui.View):
         me.move_list.remove(used_yut)
         self.selected_horse_pos = None 
         
-        msg = f"🐎 말이 **{dest}번 칸**으로 이동했어! (**{used_yut}** 사용)"
-
-        if me.active_buff == "백스텝":
-            me.active_buff = None
-            msg = f"⏪ 백스텝 효과 적용! 말이 뒤로 이동하여 **{dest}번 칸**에 도착했어! (**-{used_yut}** 사용)"
-
-        #  트랩 메시지 합치기
+        # ⭐️ [수정된 부분] 트랩을 밟았는지 여부에 따라 메시지 출력을 완전히 분리!
         if trap_msg:
-            msg += trap_msg
+            # 트랩을 밟았을 때는 '-1번 칸 이동' 같은 기본 메시지를 버리고 트랩 메시지만 띄움!
+            if me.active_buff == "백스텝":
+                me.active_buff = None
+            
+            # trap_msg 앞에 붙어있던 '\n'을 떼어내고(strip), 어떤 윷을 써서 밟았는지만 뒤에 살짝 표시
+            msg = f"{trap_msg.strip()} ({used_yut} 사용)"
+        else:
+            # 트랩을 안 밟았을 때만 평범한 이동 메시지 출력
+            if me.active_buff == "백스텝":
+                me.active_buff = None
+                msg = f"⏪ 백스텝 효과 적용! 말이 뒤로 이동하여 {dest}번 칸에 도착했어! (-{used_yut} 사용)"
+            else:
+                msg = f"🐎 말이 **{dest}번 칸**으로 이동했어! (**{used_yut}** 사용)"
 
         #  4. 골인 판정 (네가 짰던 점수 업데이트 로직 복구!)
         if dest == 99:
