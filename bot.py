@@ -10,6 +10,7 @@ import csv
 import re
 import io
 from PIL import Image, ImageDraw, ImageFont
+import aiohttp
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -2136,5 +2137,161 @@ async def start_super_yut(interaction: discord.Interaction, 상대방: discord.M
         f"{interaction.user.mention}이/가 {상대방.mention} 에게 초능력 윷놀이를 신청했어!\n(선공: {interaction.user.display_name})", 
         file=image_file, embed=embed, view=view
     )
+
+
+
+
+# ==========================================
+# 포켓몬고 관련 명령어
+# ==========================================
+
+# ⭐️ 포켓몬 타입 & 날씨를 디스코드 기본 이모지로 매핑!
+TYPE_KOREAN = {
+    "Normal": "노말", "Fighting": "격투", "Flying": "비행", "Poison": "독",
+    "Ground": "땅", "Rock": "바위", "Bug": "벌레", "Ghost": "고스트",
+    "Steel": "강철", "Fire": "불꽃", "Water": "물", "Grass": "풀",
+    "Electric": "전기", "Psychic": "에스퍼", "Ice": "얼음", "Dragon": "드래곤",
+    "Dark": "악", "Fairy": "페어리"
+}
+
+WEATHER_KOREAN = {
+    "sunny": "☀️ 맑음",
+    "rain": "🌧️ 비",
+    "partlycloudy_day": "⛅ 약간 구름",
+    "cloudy": "☁️ 흐림",
+    "windy": "💨 바람",
+    "snow": "⛄ 눈",
+    "fog": "🌫️ 안개"
+}
+
+# ⭐️ '포고'라는 이름의 명령어 그룹 클래스 생성!
+class PoGoGroup(app_commands.Group):
+    def __init__(self):
+        super().__init__(name="포고", description="포켓몬 고 관련 명령어 모음이야!")
+
+    @app_commands.command(name="레이드", description="현재 진행 중인 포켓몬 고 레이드 정보를 확인해!")
+    async def raid(self, interaction: discord.Interaction):
+        await interaction.response.defer() 
+        
+        data_url = "https://pokemon-go-api.github.io/pokemon-go-api/api/raidboss.json"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(data_url) as response:
+                if response.status != 200:
+                    return await interaction.followup.send("❌ 레이드 정보를 가져오는 데 실패했어! API 서버 상태를 확인해 봐.")
+                
+                raid_data = await response.json()
+
+        target_data = raid_data.get("currentList", {})
+        
+        if not target_data:
+            return await interaction.followup.send("❌ 현재 진행 중인 레이드 목록을 찾을 수 없어!")
+
+        graphics_data = raid_data.get("graphics", {})
+        image_url = ""
+        
+        if "Korean" in graphics_data and "png" in graphics_data["Korean"]:
+            image_url = graphics_data["Korean"]["png"]
+        elif "English" in graphics_data and "png" in graphics_data["English"]:
+            image_url = graphics_data["English"]["png"]
+            
+        if image_url and not image_url.startswith("http"):
+            if "api/graphics" in image_url:
+                idx = image_url.find("api/graphics")
+                image_url = "https://pokemon-go-api.github.io/pokemon-go-api/" + image_url[idx:]
+            else:
+                image_url = "https://pokemon-go-api.github.io/pokemon-go-api/" + image_url.lstrip("/")
+
+        if not image_url:
+            image_url = "https://pokemon-go-api.github.io/pokemon-go-api/api/graphics/English/default.png"
+
+        tier_names = {
+            "lvl1": "⭐ 1성 레이드",
+            "lvl3": "⭐⭐⭐ 3성 레이드",
+            "lvl5": "⭐⭐⭐⭐⭐ 5성 레이드",
+            "mega": "🧬 메가 레이드",
+            "legendary_mega": "🧬🌟 전설 메가 레이드",
+            "ultra_beast": "🌌 울트라비스트 레이드",
+            "shadow_lvl1": "🌑 그림자 1성 레이드",
+            "shadow_lvl3": "🌑 그림자 3성 레이드",
+            "shadow_lvl5": "🌑 그림자 5성 레이드",
+            "ex": "🎫 EX 레이드"
+        }
+
+        # ⭐️ 임베드 설명(description)에 모든 텍스트를 한 번에 조립할 준비!
+        description_text = "현재 진행 중인 레이드 정보야!\n"
+
+        for tier_key, bosses in target_data.items():
+            if not bosses: continue 
+
+            tier_title = tier_names.get(tier_key, f"🔥 {tier_key} 레이드")
+            
+            # 1. 마크다운 헤더(###)를 써서 레이드 등급 제목을 크고 굵게!
+            description_text += f"### {tier_title}\n"
+            
+            boss_list_text = []
+            
+            for boss in bosses:
+                korean_name = boss.get("names", {}).get("Korean", boss.get("id", "Unknown"))
+                
+                # 1. 타입 (앞서 만든 TYPE_KOREAN 적용)
+                types = boss.get("types", [])
+                translated_types = [TYPE_KOREAN.get(t, t) for t in types]
+                type_str = f"[{'/'.join(translated_types)}]" if translated_types else ""
+                
+                # 2. 날씨 (앞서 만든 WEATHER_KOREAN 적용)
+                weathers = boss.get("weather", [])
+                translated_weathers = [WEATHER_KOREAN.get(w.lower(), w) for w in weathers]
+                weather_str = " / ".join(translated_weathers) if translated_weathers else "❌ 없음"
+                
+                # ⭐️ 3. [신규] 약점(Counter) 데이터 파싱
+                # API가 어떻게 줄지 몰라서 리스트, 딕셔너리 모두 뚫어내는 방어막 적용!
+                counters_raw = boss.get("counter", boss.get("counters", []))
+                counters = []
+                if isinstance(counters_raw, list):
+                    for c in counters_raw:
+                        if isinstance(c, str): counters.append(c)
+                        elif isinstance(c, dict) and "type" in c: counters.append(c["type"])
+                elif isinstance(counters_raw, dict):
+                    counters = list(counters_raw.keys())
+                
+                translated_counters = [TYPE_KOREAN.get(c, c) for c in counters]
+                counter_str = f"[{'/'.join(translated_counters)}]" if translated_counters else "정보 없음"
+                
+                # 4. CP 범위
+                cp_range = boss.get("cpRange", [])
+                cp_str = f"{cp_range[0]}~{cp_range[1]}" if len(cp_range) >= 2 else "?"
+                
+                boost_range = boss.get("cpRangeBoost", [])
+                if boost_range and len(boost_range) >= 2:
+                    cp_str += f" *(🌡️ {boost_range[0]}~{boost_range[1]})*"
+                
+                # ⭐️ 5. [UX 개선] 모바일 가독성을 위해 가로 나열을 포기하고 세로로 쌓기!
+                # 'ㅤ' (투명 공백)을 써서 하위 항목들만 살짝 들여쓰기 된 것처럼 깔끔하게!
+                boss_line = (
+                    f"┃ 🔹 **{korean_name}** {type_str}\n"
+                    f"┃ ㅤ⚔️ 약점: {counter_str}\n"
+                    f"┃ ㅤ🌡️ 날씨: {weather_str}\n"
+                    f"┃ ㅤ💯 CP: {cp_str}"
+                )
+                boss_list_text.append(boss_line)
+                
+            # 보스들 사이의 띄어쓰기 블록 처리
+            description_text += "\n\n".join(boss_list_text) + "\n\n"
+            
+        embed = discord.Embed(
+            title="⚔️ 현재 포켓몬 고 레이드 보스",
+            description=description_text.strip(), # 조립된 텍스트를 한방에 꽂아넣기!
+            color=0x4CE2EC 
+        )
+
+        embed.set_image(url=image_url)
+        embed.set_footer(text="데이터 제공: pokemon-go-api")
+
+        await interaction.followup.send(embed=embed)
+
+# ⭐️ 봇의 명령어 트리에 우리가 만든 '포고' 그룹을 등록!
+# (주의: bot.run(TOKEN) 바로 위쪽 같은 전역 공간에 둬야 해)
+bot.tree.add_command(PoGoGroup())
 
 bot.run(TOKEN)
