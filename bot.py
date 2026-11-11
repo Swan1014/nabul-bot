@@ -153,7 +153,7 @@ async def on_message_edit(before, after):
                 users_str = ", ".join(found_users)
                 await after.channel.send(f"오! {users_str}이/가 워들을 완료했어!\n(현재 {len(done_today)}명 완료)")
 
-@bot.tree.command(name="워들", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
+@bot.tree.command(name="워들확인", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
 async def check_wordle_status(interaction: discord.Interaction):
     # 완료한 사람과 안 한 사람의 이름을 담을 빈 리스트 준비
     completed = []
