@@ -2295,8 +2295,28 @@ class PoGoGroup(app_commands.Group):
 bot.tree.add_command(PoGoGroup())
 
 # 1. 단어장
-WORDLE_ANSWERS = ["MOURN"]
-WORDLE_GUESSES = WORDLE_ANSWERS + ["SORRY"] 
+def load_wordle_words():
+    wordlist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "words_5.txt")
+    with open(wordlist_path, encoding="utf-8") as wordlist_file:
+        wordlist_content = wordlist_file.read()
+
+    word_lists = {}
+    for list_name in ("words", "valid"):
+        match = re.search(rf'"{list_name}"\s*:\s*\[(.*?)\]', wordlist_content, re.DOTALL)
+        if match is None:
+            raise ValueError(f'"{list_name}" list not found in {wordlist_path}')
+
+        words = re.findall(r'"([^"]+)"', match.group(1))
+        if not words or any(re.fullmatch(r"[a-zA-Z]{5}", word) is None for word in words):
+            raise ValueError(f'"{list_name}" list contains no valid five-letter words')
+
+        word_lists[list_name] = [word.upper() for word in words]
+
+    return word_lists["words"], word_lists["valid"]
+
+
+WORDLE_ANSWERS, _WORDLE_VALID_GUESSES = load_wordle_words()
+WORDLE_GUESSES = WORDLE_ANSWERS + _WORDLE_VALID_GUESSES
 
 wordle_games = {}
 
@@ -2319,7 +2339,7 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
     draw = ImageDraw.Draw(img)
     
     try:
-        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 50)
+        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 32)
     except:
         font = ImageFont.load_default() 
         
