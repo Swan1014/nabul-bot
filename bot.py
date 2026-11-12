@@ -2295,13 +2295,6 @@ class PoGoGroup(app_commands.Group):
 bot.tree.add_command(PoGoGroup())
 
 # 1. 단어장
-import discord
-from discord import app_commands
-import random
-import io
-from PIL import Image, ImageDraw, ImageFont
-
-# 1. 단어장
 WORDLE_ANSWERS = ["CIGAR", "REBUT", "SISSY", "HUMPH", "AWAKE", "BLUSH", "FOCAL", "APPLE", "TRAIN", "GHOST"]
 WORDLE_GUESSES = WORDLE_ANSWERS + ["AUDIO", "TRACK", "ONION", "PAPER"] 
 
