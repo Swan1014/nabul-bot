@@ -683,7 +683,7 @@ class RegionSelectView(discord.ui.View):
         self.add_item(RegionSelect(candidates))
 
 # 임베드 출력 명령어
-@bot.tree.command(name="날씨", description="원하는 지역의 현재 상세 날씨와 시간별 예보를 확인합니다")
+@bot.tree.command(name="날씨", description="원하는 지역의 현재 상세 날씨와 시간별 예보를 확인합니다.")
 @app_commands.describe(지역명="지역명을 입력하세요. 동의 경우 행정동으로 입력하세요.")
 async def check_weather(interaction: discord.Interaction, 지역명: str):
     await interaction.response.defer()
@@ -2295,8 +2295,8 @@ class PoGoGroup(app_commands.Group):
 bot.tree.add_command(PoGoGroup())
 
 # 1. 단어장
-WORDLE_ANSWERS = ["REBUT", "ERASE", "SPILL"]
-WORDLE_GUESSES = WORDLE_ANSWERS + ["SPEED", "LABEL", "HELLO"] 
+WORDLE_ANSWERS = ["MOURN"]
+WORDLE_GUESSES = WORDLE_ANSWERS + ["SORRY"] 
 
 wordle_games = {}
 
@@ -2319,7 +2319,7 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
     draw = ImageDraw.Draw(img)
     
     try:
-        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 65)
+        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 50)
     except:
         font = ImageFont.load_default() 
         
@@ -2412,7 +2412,7 @@ class WordleModal(discord.ui.Modal, title='워들 단어 입력'):
         img_bytes = generate_wordle_image(game_data["guesses"], game_data["evaluations"])
         file = discord.File(fp=img_bytes, filename='wordle.png')
 
-        embed = discord.Embed(title="📝 나불이 워들 (Wordle)", color=0x4CE2EC)
+        embed = discord.Embed(title="📝 워들 (Wordle)", color=0x4CE2EC)
         embed.set_image(url="attachment://wordle.png") 
         embed.set_footer(text=f"도전 횟수: {game_data['attempts']}/6")
 
@@ -2460,7 +2460,7 @@ class WordleView(discord.ui.View):
 
 
 # 6. 명령어 
-@bot.tree.command(name="워들", description="나불이랑 오리지널 5글자 워들 게임을 시작해!")
+@bot.tree.command(name="워들", description="워들 게임을 시작합니다.")
 async def wordle_start(interaction: discord.Interaction):
     user_id = interaction.user.id
     answer = random.choice(WORDLE_ANSWERS).upper()
@@ -2476,8 +2476,7 @@ async def wordle_start(interaction: discord.Interaction):
     file = discord.File(fp=img_bytes, filename='wordle.png')
 
     embed = discord.Embed(
-        title="📝 나불이 워들 (Wordle)", 
-        description="아래 버튼을 눌러서 5글자 영단어를 추측해 봐!\n**(이 화면은 너에게만 보이고, 게임이 끝나면 결과 색깔만 채널에 공유돼!)**",
+        title="📝 워들 (Wordle)",
         color=0x4CE2EC
     )
     embed.set_image(url="attachment://wordle.png")
