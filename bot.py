@@ -90,68 +90,12 @@ async def choose_for_me(interaction: discord.Interaction, 선택지: str):
 # ==========================================
 done_today = set() # 오늘 워들을 한 사람의 ID를 저장할 바구니
 
-def extract_wordle_players(content):
-    # 1. is, are, was, were playing 뒤에 붙는 말들을 통째로 날려버림
-    clean_str = re.sub(r'\s+(is|are|was|were)\s+playing.*', '', content)
-    
-    # 2. 여러 명일 때 붙는 'and'를 쉼표(',')로 바꿈
-    clean_str = clean_str.replace("and", ",")
-    
-    # 3. 쉼표를 기준으로 조각조각 낸 다음, 양옆 띄어쓰기를 없애고 빈칸이 아닌 것만 모음
-    nicknames = [name.strip() for name in clean_str.split(",") if name.strip()]
-    return nicknames
-
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        if message.author.name == "Wordle" and ("was playing" in message.content or "were playing" in message.content):
-            nicknames = extract_wordle_players(message.content)
-            
-            found_users = []
-            for nickname in nicknames:
-                # 쪼개진 닉네임들을 하나씩 서버 멤버와 대조
-                for member in message.guild.members:
-                    if member.display_name == nickname or member.name == nickname:
-                        if member.id not in done_today: # 중복 방지
-                            done_today.add(member.id)
-                            found_users.append(member.display_name)
-                        break # 찾았으면 다음 사람 찾으러 이동!
-            
-            # 새롭게 워들을 완료한 사람이 한 명이라도 있다면 알림 띄우기
-            if found_users:
-                users_str = ", ".join(found_users) # "홍길동, 김철수" 형태로 묶기
-                await message.channel.send(f"오! {users_str}이/가 워들을 완료했어!\n(현재 {len(done_today)}명 완료)")
         return
 
-    if "Wordle" in message.content and "🟩" in message.content:
-        print(f"👀 {message.author.display_name}님의 워들 수동 결과 감지!")
-        if message.author.id not in done_today:
-            done_today.add(message.author.id)
-            await message.channel.send(f"오! {message.author.display_name}, 수동으로 워들 완료 확인!\n(현재 {len(done_today)}명 완료)")
-        else:
-            print("❌ 근데 이미 done_today에 등록된 사람이라 무시함!")
-
     await bot.process_commands(message)
-
-# 메시지가 수정(Edit)되었을 때 발동하는 이벤트
-@bot.event
-async def on_message_edit(before, after):
-    if after.author.bot:
-        if after.author.name == "Wordle" and ("was playing" in after.content or "were playing" in after.content):
-            nicknames = extract_wordle_players(after.content)
-            
-            found_users = []
-            for nickname in nicknames:
-                for member in after.guild.members:
-                    if member.display_name == nickname or member.name == nickname:
-                        if member.id not in done_today:
-                            done_today.add(member.id)
-                            found_users.append(member.display_name)
-                        break
-            
-            if found_users:
-                users_str = ", ".join(found_users)
-                await after.channel.send(f"오! {users_str}이/가 워들을 완료했어!\n(현재 {len(done_today)}명 완료)")
 
 @bot.tree.command(name="워들확인", description="오늘 워들을 완료한 사람과 아직 안 한 사람을 확인합니다.")
 async def check_wordle_status(interaction: discord.Interaction):
@@ -2339,7 +2283,7 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
     draw = ImageDraw.Draw(img)
     
     try:
-        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 32)
+        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 40)
     except:
         font = ImageFont.load_default() 
         
@@ -2438,6 +2382,8 @@ class WordleModal(discord.ui.Modal, title='워들 단어 입력'):
 
         # ⭐️ [피드백 적용 2] 게임 종료 시 채팅방에 색깔 네모(이모지) 결과만 쏴주기!
         if guess == answer or game_data["attempts"] >= 6:
+            done_today.add(self.user_id)
+
             if guess == answer:
                 embed.title = "🎉 정답! 완벽해!"
                 embed.color = 0x6CA965 
