@@ -2405,7 +2405,7 @@ class WordleModal(discord.ui.Modal, title='워들 단어 입력'):
                 grid_text += "".join([emoji_map[c] for c in row_eval]) + "\n"
             
             # 3. 모두가 볼 수 있는 채팅방으로 자랑하기 전송!
-            public_result = f"{msg_title}\n도전 횟수: {game_data['attempts']}/6\n\n{grid_text}"
+            public_result = f"{msg_title}\n도전 횟수: {game_data['attempts']}/6\n{grid_text}"
             await interaction.channel.send(public_result)
             
         else:
