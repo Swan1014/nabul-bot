@@ -2295,8 +2295,8 @@ class PoGoGroup(app_commands.Group):
 bot.tree.add_command(PoGoGroup())
 
 # 1. 단어장
-WORDLE_ANSWERS = ["CIGAR", "REBUT", "SISSY", "HUMPH", "AWAKE", "BLUSH", "FOCAL", "APPLE", "TRAIN", "GHOST"]
-WORDLE_GUESSES = WORDLE_ANSWERS + ["AUDIO", "TRACK", "ONION", "PAPER"] 
+WORDLE_ANSWERS = ["REBUT", "ERASE", "SPILL"]
+WORDLE_GUESSES = WORDLE_ANSWERS + ["SPEED", "LABEL", "HELLO"] 
 
 wordle_games = {}
 
@@ -2318,9 +2318,8 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
     img = Image.new('RGB', (width, height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # ⭐️ [피드백 적용 1] 윈도우 기본 폰트 절대 경로 지정 & 크기를 65로 대폭 키움!
     try:
-        font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 65)
+        font = ImageFont.truetype("LibreFranklin-Bold.ttf", 65)
     except:
         font = ImageFont.load_default() 
         
