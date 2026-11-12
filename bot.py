@@ -2295,39 +2295,42 @@ class PoGoGroup(app_commands.Group):
 bot.tree.add_command(PoGoGroup())
 
 # 1. 단어장
+import discord
+from discord import app_commands
+import random
+import io
+from PIL import Image, ImageDraw, ImageFont
+
+# 1. 단어장
 WORDLE_ANSWERS = ["CIGAR", "REBUT", "SISSY", "HUMPH", "AWAKE", "BLUSH", "FOCAL", "APPLE", "TRAIN", "GHOST"]
 WORDLE_GUESSES = WORDLE_ANSWERS + ["AUDIO", "TRACK", "ONION", "PAPER"] 
 
 wordle_games = {}
 
-# 2. 이미지 생성기 (Pillow 캔버스)
+# 2. 고해상도 이미지 생성기
 def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
-    # 워들 네모칸 디자인 세팅
     box_size = 80
     padding = 10
     width = 5 * box_size + 6 * padding
     height = 6 * box_size + 7 * padding
     
-    # ⭐️ 네가 요청한 완벽한 색상표 적용!
     bg_color = "#000000"
     colors = {
-        "G": "#6CA965", # 초록 (정답)
-        "Y": "#C8B653", # 노랑 (위치 다름)
-        "B": "#787C7F", # 회색 (오답)
-        "EMPTY": "#3A3A3C" # 아직 안 적힌 빈칸 테두리 색깔
+        "G": "#6CA965", 
+        "Y": "#C8B653", 
+        "B": "#787C7F", 
+        "EMPTY": "#3A3A3C" 
     }
     
-    # 검은색 배경의 새 캔버스 생성
     img = Image.new('RGB', (width, height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # 폰트 불러오기 (윈도우 기본 굵은 폰트 arialbd.ttf 시도)
+    # ⭐️ [피드백 적용 1] 윈도우 기본 폰트 절대 경로 지정 & 크기를 65로 대폭 키움!
     try:
-        font = ImageFont.truetype("arialbd.ttf", 55)
+        font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 65)
     except:
-        font = ImageFont.load_default() # 못 찾으면 기본 폰트
+        font = ImageFont.load_default() 
         
-    # 6줄 x 5칸 격자 그리기
     for row in range(6):
         for col in range(5):
             x0 = padding + col * (box_size + padding)
@@ -2335,16 +2338,14 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
             x1 = x0 + box_size
             y1 = y0 + box_size
             
-            # 단어를 낸 줄 (결과 색칠)
             if row < len(guesses):
                 char = guesses[row][col]
                 color_code = evaluations[row][col]
                 fill_color = colors[color_code]
                 
-                # 색깔 네모칸 칠하기
                 draw.rectangle([x0, y0, x1, y1], fill=fill_color)
                 
-                # 글자 가운데 정렬해서 그리기
+                # 커진 폰트에 맞춰서 글자가 정중앙에 오도록 정밀 계산
                 try:
                     bbox = draw.textbbox((0, 0), char, font=font)
                     text_w = bbox[2] - bbox[0]
@@ -2356,32 +2357,30 @@ def generate_wordle_image(guesses: list, evaluations: list) -> io.BytesIO:
                     
                 draw.text((text_x, text_y), char, fill="#FFFFFF", font=font)
                 
-            # 아직 안 낸 줄 (빈칸 테두리)
             else:
                 draw.rectangle([x0, y0, x1, y1], outline=colors["EMPTY"], width=2)
                 
-    # 디스코드에 바로 쏘기 위해 이미지를 바이트 단위로 메모리에 포장
     image_binary = io.BytesIO()
     img.save(image_binary, 'PNG')
     image_binary.seek(0)
     return image_binary
 
 
-# 3. 알고리즘: 이모지 문자열 대신 "G", "Y", "B" 리스트로 반환하도록 수정
+# 3. 색상 판정 알고리즘
 def evaluate_guess_colors(guess: str, answer: str) -> list:
     guess_chars = list(guess)
     answer_chars = list(answer)
-    result = ["B"] * 5 # B: 회색(Black)
+    result = ["B"] * 5 
 
     for i in range(5):
         if guess_chars[i] == answer_chars[i]:
-            result[i] = "G" # G: 초록(Green)
+            result[i] = "G" 
             answer_chars[i] = None 
             guess_chars[i] = None
 
     for i in range(5):
         if guess_chars[i] is not None and guess_chars[i] in answer_chars:
-            result[i] = "Y" # Y: 노랑(Yellow)
+            result[i] = "Y" 
             answer_chars[answer_chars.index(guess_chars[i])] = None 
 
     return result
@@ -2413,33 +2412,43 @@ class WordleModal(discord.ui.Modal, title='워들 단어 입력'):
             return await interaction.response.send_message("❌ 사전에 없는 단어야!", ephemeral=True)
 
         answer = game_data["answer"]
-        
-        # ⭐️ 판정 및 게임 데이터 업데이트
         colors = evaluate_guess_colors(guess, answer)
         game_data["guesses"].append(guess)
         game_data["evaluations"].append(colors)
         game_data["attempts"] += 1
 
-        # ⭐️ 이미지를 그려서 디스코드 파일로 변환!
         img_bytes = generate_wordle_image(game_data["guesses"], game_data["evaluations"])
         file = discord.File(fp=img_bytes, filename='wordle.png')
 
         embed = discord.Embed(title="📝 나불이 워들 (Wordle)", color=0x4CE2EC)
-        embed.set_image(url="attachment://wordle.png") # 첨부한 이미지를 임베드 안에 쏙!
+        embed.set_image(url="attachment://wordle.png") 
         embed.set_footer(text=f"도전 횟수: {game_data['attempts']}/6")
 
-        if guess == answer:
-            embed.title = "🎉 정답! 완벽해!"
-            embed.color = 0x6CA965 
+        # ⭐️ [피드백 적용 2] 게임 종료 시 채팅방에 색깔 네모(이모지) 결과만 쏴주기!
+        if guess == answer or game_data["attempts"] >= 6:
+            if guess == answer:
+                embed.title = "🎉 정답! 완벽해!"
+                embed.color = 0x6CA965 
+                msg_title = f"🎉 <@{self.user_id}>님이 워들을 맞혔어!"
+            else:
+                embed.title = f"💀 게임 오버... 정답은 [{answer}]"
+                embed.color = 0x3A3A3C
+                msg_title = f"💀 <@{self.user_id}>님이 워들에 실패했어..."
+
             del wordle_games[self.user_id]
-            # 이미지가 들어간 임베드로 메시지 교체 (attachments 필수)
+            
+            # 1. 내 화면(나만 보기) 업데이트
             await interaction.response.edit_message(embed=embed, attachments=[file], view=None)
             
-        elif game_data["attempts"] >= 6:
-            embed.title = f"💀 게임 오버... 정답은 [{answer}]"
-            embed.color = 0x3A3A3C
-            del wordle_games[self.user_id]
-            await interaction.response.edit_message(embed=embed, attachments=[file], view=None)
+            # 2. 디스코드 이모지로 공개 결과판(Grid) 조립
+            emoji_map = {"G": "🟩", "Y": "🟨", "B": "⬛"}
+            grid_text = ""
+            for row_eval in game_data["evaluations"]:
+                grid_text += "".join([emoji_map[c] for c in row_eval]) + "\n"
+            
+            # 3. 모두가 볼 수 있는 채팅방으로 자랑하기 전송!
+            public_result = f"{msg_title}\n도전 횟수: {game_data['attempts']}/6\n\n{grid_text}"
+            await interaction.channel.send(public_result)
             
         else:
             await interaction.response.edit_message(embed=embed, attachments=[file])
@@ -2466,23 +2475,23 @@ async def wordle_start(interaction: discord.Interaction):
     
     wordle_games[user_id] = {
         "answer": answer,
-        "guesses": [],      # ⭐️ 문자열 대신 입력한 단어 자체를 리스트에 담음
-        "evaluations": [],  # ⭐️ 판정 결과(색상 리스트)를 담음
+        "guesses": [],      
+        "evaluations": [],  
         "attempts": 0
     }
 
-    # 처음 시작할 땐 아무것도 없는 빈 판 그려서 띄워주기
     img_bytes = generate_wordle_image([], [])
     file = discord.File(fp=img_bytes, filename='wordle.png')
 
     embed = discord.Embed(
         title="📝 나불이 워들 (Wordle)", 
-        description="아래 버튼을 눌러서 5글자 영단어를 추측해 봐!",
+        description="아래 버튼을 눌러서 5글자 영단어를 추측해 봐!\n**(이 화면은 너에게만 보이고, 게임이 끝나면 결과 색깔만 채널에 공유돼!)**",
         color=0x4CE2EC
     )
     embed.set_image(url="attachment://wordle.png")
     embed.set_footer(text="도전 횟수: 0/6")
 
-    await interaction.response.send_message(embed=embed, file=file, view=WordleView(user_id))
+    # ⭐️ [피드백 적용 3] 게임 플레이 자체를 '나만 보기(ephemeral)'로 실행!
+    await interaction.response.send_message(embed=embed, file=file, view=WordleView(user_id), ephemeral=True)
 
 bot.run(TOKEN)
